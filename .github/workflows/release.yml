@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Unit tests gate
+  # ---------------------------------------------------------------------------
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        working-directory: tests
+        run: make test
+
+  # ---------------------------------------------------------------------------
+  # Build Windows installer + portable zip
+  # ---------------------------------------------------------------------------
+  build-windows:
+    name: Build Windows Release
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.0
+
+      - name: Configure CMake
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMYTERM_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force
+          Compress-Archive -Path build/myterm.exe, README.md, LICENSE -DestinationPath "dist/myterm-${{ steps.version.outputs.version }}-windows-x64.zip"
+
+      - name: Build installer
+        shell: cmd
+        run: |
+          choco install innosetup -y --no-progress
+          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.version.outputs.version }} installer\myterm.iss
+
+      - name: Upload portable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: myterm-windows-portable
+          path: dist/myterm-*.zip
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: myterm-windows-installer
+          path: dist/myterm-*-setup-x64.exe
+
+  # ---------------------------------------------------------------------------
+  # Build Linux binary + tarball
+  # ---------------------------------------------------------------------------
+  build-linux:
+    name: Build Linux Release
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libgl-dev ninja-build
+
+      - name: Install Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.0
+
+      - name: Configure CMake
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMYTERM_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create tarball
+        run: |
+          mkdir -p dist
+          tar czf "dist/myterm-${{ steps.version.outputs.version }}-linux-x64.tar.gz" \
+            -C build myterm \
+            -C "$GITHUB_WORKSPACE" README.md LICENSE
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: myterm-linux-tarball
+          path: dist/myterm-*.tar.gz
+
+  # ---------------------------------------------------------------------------
+  # Create GitHub Release with all artifacts
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-linux]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          cat > release_notes.md << 'NOTES'
+          ## Downloads
+
+          | Platform | File | Description |
+          |----------|------|-------------|
+          | Windows | `myterm-${{ steps.version.outputs.version }}-setup-x64.exe` | Installer (recommended) |
+          | Windows | `myterm-${{ steps.version.outputs.version }}-windows-x64.zip` | Portable (no install needed) |
+          | Linux | `myterm-${{ steps.version.outputs.version }}-linux-x64.tar.gz` | Binary tarball |
+
+          ## Installation
+
+          ### Windows Installer
+          1. Download and run `myterm-${{ steps.version.outputs.version }}-setup-x64.exe`
+          2. Follow the setup wizard
+          3. Optionally add to PATH for command-line access
+
+          ### Windows Portable
+          1. Extract `myterm-${{ steps.version.outputs.version }}-windows-x64.zip`
+          2. Run `myterm.exe`
+
+          ### Linux
+          ```bash
+          tar xzf myterm-${{ steps.version.outputs.version }}-linux-x64.tar.gz
+          chmod +x myterm
+          ./myterm
+          ```
+
+          ## System Requirements
+          - **Windows**: Windows 10 version 1809+ or Windows 11
+          - **Linux**: X11, OpenGL 3.3+
+          NOTES
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: myterm v${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            artifacts/**/*
+          fail_on_unmatched_files: false
