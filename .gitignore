@@ -1,0 +1,14 @@
+build/
+.cache/
+.vscode/
+.vs/
+*.exe
+*.obj
+*.o
+*.lib
+*.a
+*.dll
+*.so
+*.dylib
+compile_commands.json
+CMakeUserPresets.json
