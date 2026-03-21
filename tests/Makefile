@@ -31,6 +31,7 @@ test: $(TESTS)
 	for t in $(TESTS); do \
 		./$$t || failed=$$((failed + 1)); \
 	done; \
+	./test_release.sh || failed=$$((failed + 1)); \
 	echo ""; \
 	if [ $$failed -gt 0 ]; then \
 		echo "$$failed test suite(s) FAILED"; \
