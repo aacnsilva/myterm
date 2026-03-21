@@ -8,6 +8,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Options
 # --------------------------------------------------------------------------
 option(MYTERM_USE_SYSTEM_RAYLIB "Use system-installed raylib instead of FetchContent" OFF)
+option(MYTERM_BUILD_TESTS "Build unit tests" ON)
 
 # --------------------------------------------------------------------------
 # libghostty-vt  (built via Zig, pulled as a CMake ExternalProject)
@@ -90,50 +91,80 @@ else()
 endif()
 
 # --------------------------------------------------------------------------
-# myterm executable
+# Common source library (shared between main executable and tests)
 # --------------------------------------------------------------------------
-add_executable(myterm
-    src/main.c
+add_library(myterm_lib STATIC
     src/terminal.c
     src/renderer.c
     src/input.c
+    src/tabs.c
+    src/config.c
+    src/search.c
+    src/splits.c
 )
 
 if(WIN32)
-    target_sources(myterm PRIVATE src/pty_windows.c)
+    target_sources(myterm_lib PRIVATE src/pty_windows.c)
 else()
-    target_sources(myterm PRIVATE src/pty_unix.c)
+    target_sources(myterm_lib PRIVATE src/pty_unix.c)
 endif()
 
-target_include_directories(myterm PRIVATE
+target_include_directories(myterm_lib PUBLIC
     ${CMAKE_SOURCE_DIR}/src
     ${GHOSTTY_SOURCE_DIR}/include
 )
 
-target_link_libraries(myterm PRIVATE
+target_link_libraries(myterm_lib PUBLIC
     ghostty_vt
     raylib
 )
 
-# Windows-specific libraries
 if(WIN32)
-    target_link_libraries(myterm PRIVATE
+    target_link_libraries(myterm_lib PUBLIC
         ws2_32
         user32
         gdi32
         shell32
         advapi32
     )
-    target_compile_definitions(myterm PRIVATE
-        _WIN32_WINNT=0x0A00   # Windows 10+ (ConPTY)
+    target_compile_definitions(myterm_lib PUBLIC
+        _WIN32_WINNT=0x0A00
         UNICODE
         _UNICODE
     )
 endif()
 
-# Compiler warnings
 if(MSVC)
-    target_compile_options(myterm PRIVATE /W4)
+    target_compile_options(myterm_lib PRIVATE /W4)
 else()
-    target_compile_options(myterm PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(myterm_lib PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# --------------------------------------------------------------------------
+# myterm executable
+# --------------------------------------------------------------------------
+add_executable(myterm src/main.c)
+target_link_libraries(myterm PRIVATE myterm_lib)
+
+# --------------------------------------------------------------------------
+# Tests
+# --------------------------------------------------------------------------
+if(MYTERM_BUILD_TESTS)
+    enable_testing()
+
+    # Test executables
+    add_executable(test_tabs     tests/test_tabs.c)
+    add_executable(test_config   tests/test_config.c)
+    add_executable(test_search   tests/test_search.c)
+    add_executable(test_splits   tests/test_splits.c)
+
+    target_link_libraries(test_tabs     PRIVATE myterm_lib)
+    target_link_libraries(test_config   PRIVATE myterm_lib)
+    target_link_libraries(test_search   PRIVATE myterm_lib)
+    target_link_libraries(test_splits   PRIVATE myterm_lib)
+
+    add_test(NAME tabs     COMMAND test_tabs)
+    add_test(NAME config   COMMAND test_config)
+    add_test(NAME search   COMMAND test_search)
+    add_test(NAME splits   COMMAND test_splits)
 endif()
