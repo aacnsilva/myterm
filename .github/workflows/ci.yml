@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Unit tests (no external deps — runs on any platform)
+  # Unit tests (no external deps — fast, runs anywhere)
   # ---------------------------------------------------------------------------
   test:
     name: Unit Tests
@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run tests
+      - name: Build and run tests
         working-directory: tests
         run: make test
 
@@ -33,17 +33,35 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Zig
-        uses: goto-bus-stop/setup-zig@v2
+        uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.0
+          version: 0.14.0
+
+      - name: Install Ninja
+        run: choco install ninja -y --no-progress
+
+      - name: Cache Ghostty source
+        uses: actions/cache@v4
+        with:
+          path: build/_deps/ghostty-src
+          key: ghostty-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Cache Ghostty build
+        uses: actions/cache@v4
+        with:
+          path: build/ghostty-lib
+          key: ghostty-lib-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
 
       - name: Configure CMake
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMYTERM_BUILD_TESTS=OFF
 
       - name: Build
         run: cmake --build build --config Release
+        timeout-minutes: 30
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -61,23 +79,40 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev \
-            libxcursor-dev libxi-dev libgl-dev ninja-build
+          sudo apt-get install -y \
+            ninja-build \
+            libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libgl-dev
 
       - name: Install Zig
-        uses: goto-bus-stop/setup-zig@v2
+        uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.0
+          version: 0.14.0
+
+      - name: Cache Ghostty source
+        uses: actions/cache@v4
+        with:
+          path: build/_deps/ghostty-src
+          key: ghostty-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Cache Ghostty build
+        uses: actions/cache@v4
+        with:
+          path: build/ghostty-lib
+          key: ghostty-lib-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
 
       - name: Configure CMake
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMYTERM_BUILD_TESTS=OFF
 
       - name: Build
         run: cmake --build build --config Release
+        timeout-minutes: 30
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
