@@ -30,6 +30,18 @@ FetchContent_Declare(ghostty
 )
 FetchContent_MakeAvailable(ghostty)
 
+# Ghostty's CMakeLists.txt declares ghostty-vt as SHARED IMPORTED but does not
+# set IMPORTED_IMPLIB on Windows.  CMake requires this property for shared
+# imported targets on Windows (the .lib import library that accompanies the
+# .dll).  Derive it from IMPORTED_LOCATION by replacing the extension.
+if(WIN32)
+    get_target_property(_ghostty_loc ghostty-vt IMPORTED_LOCATION)
+    if(_ghostty_loc)
+        string(REGEX REPLACE "\\.[^.]+$" ".lib" _ghostty_implib "${_ghostty_loc}")
+        set_target_properties(ghostty-vt PROPERTIES IMPORTED_IMPLIB "${_ghostty_implib}")
+    endif()
+endif()
+
 # --------------------------------------------------------------------------
 # Raylib  (cross-platform windowing + 2D rendering)
 # --------------------------------------------------------------------------

@@ -311,6 +311,30 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 16b. CMakeLists.txt sets IMPORTED_IMPLIB for ghostty-vt on Windows
+# ---------------------------------------------------------------------------
+test_name="CMakeLists.txt sets IMPORTED_IMPLIB for Windows"
+if grep -q 'IMPORTED_IMPLIB' "$REPO_ROOT/CMakeLists.txt"; then
+    pass "$test_name"
+else
+    fail "$test_name" "Missing IMPORTED_IMPLIB workaround — Windows CMake configure will fail"
+fi
+
+test_name="IMPORTED_IMPLIB is guarded by WIN32 check"
+if awk '/if\(WIN32\)/,/endif\(\)/' "$REPO_ROOT/CMakeLists.txt" | grep -q 'IMPORTED_IMPLIB'; then
+    pass "$test_name"
+else
+    fail "$test_name" "IMPORTED_IMPLIB should be inside an if(WIN32) block"
+fi
+
+test_name="IMPORTED_IMPLIB derived from ghostty-vt IMPORTED_LOCATION"
+if grep -q 'get_target_property.*ghostty-vt.*IMPORTED_LOCATION' "$REPO_ROOT/CMakeLists.txt"; then
+    pass "$test_name"
+else
+    fail "$test_name" "Should derive IMPORTED_IMPLIB from the ghostty-vt IMPORTED_LOCATION"
+fi
+
+# ---------------------------------------------------------------------------
 # 17. Windows-specific source exists
 # ---------------------------------------------------------------------------
 test_name="src/pty_windows.c exists"
