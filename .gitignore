@@ -12,3 +12,9 @@ build/
 *.dylib
 compile_commands.json
 CMakeUserPresets.json
+
+# Test binaries
+tests/test_tabs
+tests/test_config
+tests/test_search
+tests/test_splits
