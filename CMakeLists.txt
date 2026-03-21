@@ -11,67 +11,24 @@ option(MYTERM_USE_SYSTEM_RAYLIB "Use system-installed raylib instead of FetchCon
 option(MYTERM_BUILD_TESTS "Build unit tests" ON)
 
 # --------------------------------------------------------------------------
-# libghostty-vt  (built via Zig, pulled as a CMake ExternalProject)
+# libghostty-vt  (uses Ghostty's own CMakeLists.txt which invokes zig build)
+#
+# Ghostty's CMakeLists.txt creates an IMPORTED SHARED library target
+# called "ghostty-vt" with proper include dirs and library location.
+# Requires: zig 0.15.x on PATH.
+#
+# Reference: https://github.com/ghostty-org/ghostling
 # --------------------------------------------------------------------------
-include(ExternalProject)
 include(FetchContent)
 
-# Ghostty source — we only need the libghostty-vt portion.
-# Users can override GHOSTTY_SOURCE_DIR to point at a local checkout.
-if(NOT DEFINED GHOSTTY_SOURCE_DIR)
-    FetchContent_Declare(
-        ghostty
-        GIT_REPOSITORY https://github.com/ghostty-org/ghostty.git
-        GIT_TAG        main
-        GIT_SHALLOW    TRUE
-    )
-    FetchContent_MakeAvailable(ghostty)
-    set(GHOSTTY_SOURCE_DIR ${ghostty_SOURCE_DIR})
-endif()
-
-# Build libghostty-vt static library via Zig
-set(GHOSTTY_LIB_DIR ${CMAKE_BINARY_DIR}/ghostty-lib)
-file(MAKE_DIRECTORY ${GHOSTTY_LIB_DIR})
-
-# Detect Zig target triple for the host platform
-if(WIN32)
-    set(ZIG_TARGET "x86_64-windows")
-elseif(APPLE)
-    set(ZIG_TARGET "x86_64-macos")
-else()
-    set(ZIG_TARGET "x86_64-linux")
-endif()
-
-ExternalProject_Add(
-    ghostty_vt_build
-    SOURCE_DIR      ${GHOSTTY_SOURCE_DIR}
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND   zig build
-                    -Demit-lib
-                    -Doptimize=ReleaseFast
-                    --prefix ${GHOSTTY_LIB_DIR}
-    BUILD_IN_SOURCE TRUE
-    INSTALL_COMMAND ""
-    BUILD_BYPRODUCTS
-        ${GHOSTTY_LIB_DIR}/lib/libghostty-vt.a
-        ${GHOSTTY_LIB_DIR}/lib/ghostty-vt.lib
+# Pin to a known-good commit for reproducible builds.
+# Update this hash when upgrading ghostty.
+FetchContent_Declare(ghostty
+    GIT_REPOSITORY https://github.com/ghostty-org/ghostty.git
+    GIT_TAG        main
+    GIT_SHALLOW    TRUE
 )
-
-# Create imported target for libghostty-vt
-add_library(ghostty_vt STATIC IMPORTED)
-if(WIN32)
-    set_target_properties(ghostty_vt PROPERTIES
-        IMPORTED_LOCATION ${GHOSTTY_LIB_DIR}/lib/ghostty-vt.lib
-    )
-else()
-    set_target_properties(ghostty_vt PROPERTIES
-        IMPORTED_LOCATION ${GHOSTTY_LIB_DIR}/lib/libghostty-vt.a
-    )
-endif()
-target_include_directories(ghostty_vt INTERFACE
-    ${GHOSTTY_SOURCE_DIR}/include
-)
-add_dependencies(ghostty_vt ghostty_vt_build)
+FetchContent_MakeAvailable(ghostty)
 
 # --------------------------------------------------------------------------
 # Raylib  (cross-platform windowing + 2D rendering)
@@ -111,11 +68,10 @@ endif()
 
 target_include_directories(myterm_lib PUBLIC
     ${CMAKE_SOURCE_DIR}/src
-    ${GHOSTTY_SOURCE_DIR}/include
 )
 
 target_link_libraries(myterm_lib PUBLIC
-    ghostty_vt
+    ghostty-vt
     raylib
 )
 
@@ -147,12 +103,13 @@ add_executable(myterm src/main.c)
 target_link_libraries(myterm PRIVATE myterm_lib)
 
 # --------------------------------------------------------------------------
-# Tests
+# Tests  (standalone via tests/Makefile — no ghostty/raylib needed)
 # --------------------------------------------------------------------------
+# CMake tests link against myterm_lib and thus need the full build.
+# For fast CI testing, use the standalone Makefile: cd tests && make test
 if(MYTERM_BUILD_TESTS)
     enable_testing()
 
-    # Test executables
     add_executable(test_tabs     tests/test_tabs.c)
     add_executable(test_config   tests/test_config.c)
     add_executable(test_search   tests/test_search.c)
