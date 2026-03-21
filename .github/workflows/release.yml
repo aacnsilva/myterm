@@ -58,25 +58,11 @@ jobs:
           Compress-Archive -Path build/myterm.exe, README.md, LICENSE `
             -DestinationPath "dist/myterm-${{ steps.version.outputs.version }}-windows-x64.zip"
 
-      - name: Install Inno Setup
-        run: choco install innosetup -y --no-progress
-
-      - name: Build installer
-        shell: cmd
-        run: |
-          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.version.outputs.version }} installer\myterm.iss
-
       - name: Upload portable zip
         uses: actions/upload-artifact@v4
         with:
           name: myterm-windows-portable
           path: dist/myterm-*-windows-x64.zip
-
-      - name: Upload installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: myterm-windows-installer
-          path: dist/myterm-*-setup-x64.exe
 
   # ---------------------------------------------------------------------------
   # Build Linux tarball
@@ -154,18 +140,12 @@ jobs:
 
           | Platform | File | Description |
           |----------|------|-------------|
-          | Windows | \`myterm-${VERSION}-setup-x64.exe\` | Installer (recommended) |
-          | Windows | \`myterm-${VERSION}-windows-x64.zip\` | Portable (no install needed) |
+          | Windows | \`myterm-${VERSION}-windows-x64.zip\` | Portable zip |
           | Linux | \`myterm-${VERSION}-linux-x64.tar.gz\` | Binary tarball |
 
           ## Installation
 
-          ### Windows Installer
-          1. Download and run \`myterm-${VERSION}-setup-x64.exe\`
-          2. Follow the setup wizard
-          3. Optionally add to PATH for command-line access
-
-          ### Windows Portable
+          ### Windows
           1. Extract \`myterm-${VERSION}-windows-x64.zip\`
           2. Run \`myterm.exe\`
 
