@@ -159,6 +159,58 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 9b. Inno Setup installer
+# ---------------------------------------------------------------------------
+test_name="installer.iss exists"
+if [ -f "$REPO_ROOT/installer.iss" ]; then
+    pass "$test_name"
+else
+    fail "$test_name" "installer.iss is missing — installer build will fail"
+fi
+
+test_name="installer.iss references myterm.exe"
+if grep -q 'MyAppExeName.*myterm\.exe\|Source:.*myterm\.exe\|{#MyAppExeName}' "$REPO_ROOT/installer.iss"; then
+    pass "$test_name"
+else
+    fail "$test_name" "installer.iss does not reference myterm.exe"
+fi
+
+test_name="installer.iss includes README.md"
+if grep -q 'README.md' "$REPO_ROOT/installer.iss"; then
+    pass "$test_name"
+else
+    fail "$test_name" "installer.iss does not include README.md"
+fi
+
+test_name="installer.iss includes LICENSE"
+if grep -q 'LICENSE' "$REPO_ROOT/installer.iss"; then
+    pass "$test_name"
+else
+    fail "$test_name" "installer.iss does not include LICENSE"
+fi
+
+test_name="release workflow builds installer with iscc"
+if grep -q 'iscc' "$RELEASE_YML"; then
+    pass "$test_name"
+else
+    fail "$test_name" "Release workflow does not invoke iscc (Inno Setup compiler)"
+fi
+
+test_name="release workflow uploads installer artifact"
+if grep -q 'myterm-windows-installer' "$RELEASE_YML"; then
+    pass "$test_name"
+else
+    fail "$test_name" "Release workflow does not upload installer artifact"
+fi
+
+test_name="release notes reference installer"
+if grep -q 'setup\.exe' "$RELEASE_YML"; then
+    pass "$test_name"
+else
+    fail "$test_name" "Release notes do not mention the installer"
+fi
+
+# ---------------------------------------------------------------------------
 # 10. Release notes are Windows-only (no Linux references)
 # ---------------------------------------------------------------------------
 test_name="release notes have no Linux download entry"
