@@ -7,7 +7,7 @@
  */
 
 #include "myterm.h"
-#include <ghostty/ghostty.h>
+#include <ghostty/vt.h>
 
 GhosttyTerminal      mt_terminal_get_vt(const MtTerminal *t);
 GhosttyRenderState   mt_terminal_get_render_state(const MtTerminal *t);

@@ -8,7 +8,7 @@
  */
 
 #include "myterm.h"
-#include <ghostty/ghostty.h>
+#include <ghostty/vt.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -42,48 +42,48 @@ MtTerminal *mt_terminal_new(int cols, int rows)
     }
 
     /* Render state — used to snapshot the terminal for drawing */
-    err = ghostty_render_state_new(&t->render_state);
+    err = ghostty_render_state_new(NULL, &t->render_state);
     if (err != GHOSTTY_SUCCESS) {
-        ghostty_terminal_destroy(t->vt);
+        ghostty_terminal_free(t->vt);
         free(t);
         return NULL;
     }
 
     /* Input encoders — translate platform key/mouse events to VT sequences */
-    err = ghostty_key_encoder_new(&t->key_encoder);
+    err = ghostty_key_encoder_new(NULL, &t->key_encoder);
     if (err != GHOSTTY_SUCCESS) {
-        ghostty_render_state_destroy(t->render_state);
-        ghostty_terminal_destroy(t->vt);
+        ghostty_render_state_free(t->render_state);
+        ghostty_terminal_free(t->vt);
         free(t);
         return NULL;
     }
 
-    err = ghostty_key_encoder_event_new(&t->key_event);
+    err = ghostty_key_event_new(NULL, &t->key_event);
     if (err != GHOSTTY_SUCCESS) {
-        ghostty_key_encoder_destroy(t->key_encoder);
-        ghostty_render_state_destroy(t->render_state);
-        ghostty_terminal_destroy(t->vt);
+        ghostty_key_encoder_free(t->key_encoder);
+        ghostty_render_state_free(t->render_state);
+        ghostty_terminal_free(t->vt);
         free(t);
         return NULL;
     }
 
-    err = ghostty_mouse_encoder_new(&t->mouse_encoder);
+    err = ghostty_mouse_encoder_new(NULL, &t->mouse_encoder);
     if (err != GHOSTTY_SUCCESS) {
-        ghostty_key_encoder_event_destroy(t->key_event);
-        ghostty_key_encoder_destroy(t->key_encoder);
-        ghostty_render_state_destroy(t->render_state);
-        ghostty_terminal_destroy(t->vt);
+        ghostty_key_event_free(t->key_event);
+        ghostty_key_encoder_free(t->key_encoder);
+        ghostty_render_state_free(t->render_state);
+        ghostty_terminal_free(t->vt);
         free(t);
         return NULL;
     }
 
-    err = ghostty_mouse_encoder_event_new(&t->mouse_event);
+    err = ghostty_mouse_event_new(NULL, &t->mouse_event);
     if (err != GHOSTTY_SUCCESS) {
-        ghostty_mouse_encoder_destroy(t->mouse_encoder);
-        ghostty_key_encoder_event_destroy(t->key_event);
-        ghostty_key_encoder_destroy(t->key_encoder);
-        ghostty_render_state_destroy(t->render_state);
-        ghostty_terminal_destroy(t->vt);
+        ghostty_mouse_encoder_free(t->mouse_encoder);
+        ghostty_key_event_free(t->key_event);
+        ghostty_key_encoder_free(t->key_encoder);
+        ghostty_render_state_free(t->render_state);
+        ghostty_terminal_free(t->vt);
         free(t);
         return NULL;
     }
@@ -99,12 +99,12 @@ void mt_terminal_destroy(MtTerminal *t)
 {
     if (!t) return;
     if (t->valid) {
-        ghostty_mouse_encoder_event_destroy(t->mouse_event);
-        ghostty_mouse_encoder_destroy(t->mouse_encoder);
-        ghostty_key_encoder_event_destroy(t->key_event);
-        ghostty_key_encoder_destroy(t->key_encoder);
-        ghostty_render_state_destroy(t->render_state);
-        ghostty_terminal_destroy(t->vt);
+        ghostty_mouse_event_free(t->mouse_event);
+        ghostty_mouse_encoder_free(t->mouse_encoder);
+        ghostty_key_event_free(t->key_event);
+        ghostty_key_encoder_free(t->key_encoder);
+        ghostty_render_state_free(t->render_state);
+        ghostty_terminal_free(t->vt);
     }
     free(t);
 }
@@ -112,7 +112,7 @@ void mt_terminal_destroy(MtTerminal *t)
 void mt_terminal_feed(MtTerminal *t, const char *data, size_t len)
 {
     if (!t || !t->valid || !data || len == 0) return;
-    ghostty_terminal_vt_write(t->vt, data, len);
+    ghostty_terminal_vt_write(t->vt, (const uint8_t *)data, len);
 }
 
 void mt_terminal_resize(MtTerminal *t, int cols, int rows)
