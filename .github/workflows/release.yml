@@ -22,7 +22,7 @@ jobs:
         run: make test
 
   # ---------------------------------------------------------------------------
-  # Build Windows portable zip
+  # Build Windows portable zip and installer
   # ---------------------------------------------------------------------------
   build-windows:
     name: Build Windows
@@ -30,6 +30,9 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
