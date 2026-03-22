@@ -104,12 +104,16 @@ endif()
 
 target_include_directories(myterm_lib PUBLIC
     ${CMAKE_SOURCE_DIR}/src
+    ${ghostty_SOURCE_DIR}/include
 )
 
 target_link_libraries(myterm_lib PUBLIC
     ${MYTERM_GHOSTTY_TARGET}
     raylib
 )
+if(TARGET zig_build_lib_vt)
+    add_dependencies(myterm_lib zig_build_lib_vt)
+endif()
 
 if(WIN32)
     target_link_libraries(myterm_lib PUBLIC

@@ -1,22 +1,22 @@
 /*
  * input.c — Keyboard and mouse input handling.
  *
- * Translates Raylib key/mouse events into VT escape sequences
- * using libghostty-vt's key and mouse encoders, then writes
- * the encoded bytes to the PTY.
+ * Translates Raylib key and mouse events into VT escape sequences
+ * using libghostty-vt's encoders, then writes the encoded bytes
+ * to the PTY.
  */
 
 #include "myterm.h"
 #include "terminal_internal.h"
 #include <raylib.h>
 #include <ghostty/ghostty.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
-/* Map a Raylib key to a ghostty key code.
- * Returns GHOSTTY_KEY_NONE if no mapping exists. */
+/* Map a Raylib key to a Ghostty key code. */
 static GhosttyKey raylib_to_ghostty_key(int key)
 {
-    /* Printable ASCII range */
     if (key >= KEY_A && key <= KEY_Z)
         return GHOSTTY_KEY_A + (key - KEY_A);
     if (key >= KEY_ZERO && key <= KEY_NINE)
@@ -65,40 +65,72 @@ static GhosttyKey raylib_to_ghostty_key(int key)
     }
 }
 
-/* Build modifier flags from current Raylib keyboard state */
 static GhosttyMods get_current_mods(void)
 {
     GhosttyMods mods = 0;
-    if (IsKeyDown(KEY_LEFT_SHIFT)   || IsKeyDown(KEY_RIGHT_SHIFT))   mods |= GHOSTTY_MOD_SHIFT;
-    if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) mods |= GHOSTTY_MOD_CTRL;
-    if (IsKeyDown(KEY_LEFT_ALT)     || IsKeyDown(KEY_RIGHT_ALT))     mods |= GHOSTTY_MOD_ALT;
-    if (IsKeyDown(KEY_LEFT_SUPER)   || IsKeyDown(KEY_RIGHT_SUPER))   mods |= GHOSTTY_MOD_SUPER;
+
+    if (IsKeyDown(KEY_LEFT_SHIFT)   || IsKeyDown(KEY_RIGHT_SHIFT))   mods |= GHOSTTY_MODS_SHIFT;
+    if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) mods |= GHOSTTY_MODS_CTRL;
+    if (IsKeyDown(KEY_LEFT_ALT)     || IsKeyDown(KEY_RIGHT_ALT))     mods |= GHOSTTY_MODS_ALT;
+    if (IsKeyDown(KEY_LEFT_SUPER)   || IsKeyDown(KEY_RIGHT_SUPER))   mods |= GHOSTTY_MODS_SUPER;
+
     return mods;
+}
+
+static void sync_mouse_encoder_geometry(MtTerminal *term, GhosttyMouseEncoder encoder)
+{
+    int cols = mt_terminal_cols(term);
+    int rows = mt_terminal_rows(term);
+    if (cols <= 0) cols = 1;
+    if (rows <= 0) rows = 1;
+
+    int screen_width = GetScreenWidth();
+    int screen_height = GetScreenHeight();
+    if (screen_width <= 0) screen_width = cols;
+    if (screen_height <= 0) screen_height = rows;
+
+    GhosttyMouseEncoderSize size = GHOSTTY_INIT_SIZED(GhosttyMouseEncoderSize);
+    size.screen_width = (uint32_t)screen_width;
+    size.screen_height = (uint32_t)screen_height;
+    size.cell_width = (uint32_t)(screen_width / cols);
+    size.cell_height = (uint32_t)(screen_height / rows);
+    if (size.cell_width == 0) size.cell_width = 1;
+    if (size.cell_height == 0) size.cell_height = 1;
+
+    ghostty_mouse_encoder_setopt(encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size);
+}
+
+static int write_encoded(MtPty *pty, const char *buf, int n)
+{
+    if (!pty || !buf || n <= 0) return 0;
+
+    int w = mt_pty_write(pty, buf, (size_t)n);
+    return w > 0 ? w : 0;
 }
 
 int mt_input_process(MtTerminal *term, MtPty *pty)
 {
+    if (!term || !pty) return 0;
+
     int total_written = 0;
-    char encode_buf[64];
+    char encode_buf[128];
 
-    GhosttyTerminal     vt      = mt_terminal_get_vt(term);
-    GhosttyKeyEncoder   kenc    = mt_terminal_get_key_encoder(term);
-    GhosttyKeyEvent     kevt    = mt_terminal_get_key_event(term);
-    GhosttyMouseEncoder menc    = mt_terminal_get_mouse_encoder(term);
-    GhosttyMouseEvent   mevt    = mt_terminal_get_mouse_event(term);
+    GhosttyTerminal     vt   = mt_terminal_get_vt(term);
+    GhosttyKeyEncoder   kenc = mt_terminal_get_key_encoder(term);
+    GhosttyKeyEvent     kevt = mt_terminal_get_key_event(term);
+    GhosttyMouseEncoder menc = mt_terminal_get_mouse_encoder(term);
+    GhosttyMouseEvent   mevt = mt_terminal_get_mouse_event(term);
 
-    /* Sync encoder options with current terminal modes */
     ghostty_key_encoder_setopt_from_terminal(kenc, vt);
     ghostty_mouse_encoder_setopt_from_terminal(menc, vt);
+    sync_mouse_encoder_geometry(term, menc);
 
-    /* --- Keyboard input --- */
-
-    /* Handle character input (typed text including shifted characters) */
+    /* Typed character input */
     int ch;
     while ((ch = GetCharPressed()) != 0) {
-        /* For simple printable characters, just UTF-8 encode and send */
         char utf8[5] = {0};
         int len = 0;
+
         if (ch < 0x80) {
             utf8[0] = (char)ch;
             len = 1;
@@ -119,141 +151,131 @@ int mt_input_process(MtTerminal *term, MtPty *pty)
             len = 4;
         }
 
-        /* Only send directly if no control modifiers are active
-         * (Ctrl+key is handled below via key encoder) */
         GhosttyMods mods = get_current_mods();
-        if (!(mods & (GHOSTTY_MOD_CTRL | GHOSTTY_MOD_ALT))) {
-            int w = mt_pty_write(pty, utf8, (size_t)len);
-            if (w > 0) total_written += w;
+        if (!(mods & (GHOSTTY_MODS_CTRL | GHOSTTY_MODS_ALT))) {
+            total_written += write_encoded(pty, utf8, len);
         }
     }
 
-    /* Handle special/modifier keys via the ghostty key encoder */
+    /* Special keys */
     int key;
     while ((key = GetKeyPressed()) != 0) {
         GhosttyKey gk = raylib_to_ghostty_key(key);
         if (gk == GHOSTTY_KEY_NONE) continue;
 
         GhosttyMods mods = get_current_mods();
+        bool printable_key =
+            (key >= KEY_A && key <= KEY_Z) ||
+            (key >= KEY_ZERO && key <= KEY_NINE) ||
+            key == KEY_SPACE || key == KEY_MINUS || key == KEY_EQUAL ||
+            key == KEY_LEFT_BRACKET || key == KEY_RIGHT_BRACKET ||
+            key == KEY_BACKSLASH || key == KEY_SEMICOLON ||
+            key == KEY_APOSTROPHE || key == KEY_COMMA ||
+            key == KEY_PERIOD || key == KEY_SLASH || key == KEY_GRAVE;
 
-        /* Skip plain printable keys (already handled above) */
-        if (gk >= GHOSTTY_KEY_SPACE && gk <= GHOSTTY_KEY_GRAVE &&
-            !(mods & (GHOSTTY_MOD_CTRL | GHOSTTY_MOD_ALT))) {
+        if (printable_key && !(mods & (GHOSTTY_MODS_CTRL | GHOSTTY_MODS_ALT))) {
             continue;
         }
 
         ghostty_key_event_set(kevt, gk, GHOSTTY_KEY_ACTION_PRESS, mods);
-        int n = ghostty_key_encoder_encode(kenc, kevt, encode_buf, sizeof(encode_buf));
-        if (n > 0) {
-            int w = mt_pty_write(pty, encode_buf, (size_t)n);
-            if (w > 0) total_written += w;
-        }
+        total_written += write_encoded(
+            pty,
+            encode_buf,
+            ghostty_key_encoder_encode(kenc, kevt, encode_buf, sizeof(encode_buf))
+        );
     }
 
-    /* --- Mouse input --- */
+    bool mouse_tracking = false;
+    ghostty_terminal_get(vt, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &mouse_tracking);
 
-    /* Scroll */
+    /* Mouse wheel */
     Vector2 wheel = GetMouseWheelMoveV();
     if (wheel.y != 0) {
-        /* Check if the terminal has mouse mode enabled */
-        GhosttyTerminalMode mode;
-        ghostty_terminal_mode_get(vt, GHOSTTY_MODE_MOUSE_TRACKING, &mode);
-
-        if (mode.enabled) {
-            /* Mouse tracking active → encode as mouse event */
+        if (mouse_tracking) {
             Vector2 pos = GetMousePosition();
-            int col = (int)(pos.x / mt_renderer_cell_width(NULL));
-            int row = (int)(pos.y / mt_renderer_cell_height(NULL));
 
-            GhosttyMouseButton btn = (wheel.y > 0)
-                ? GHOSTTY_MOUSE_WHEEL_UP
-                : GHOSTTY_MOUSE_WHEEL_DOWN;
+            ghostty_mouse_event_set_action(mevt, GHOSTTY_MOUSE_ACTION_PRESS);
+            ghostty_mouse_event_set_button(
+                mevt,
+                wheel.y > 0 ? GHOSTTY_MOUSE_BUTTON_FOUR : GHOSTTY_MOUSE_BUTTON_FIVE
+            );
+            ghostty_mouse_event_set_mods(mevt, get_current_mods());
+            ghostty_mouse_event_set_position(mevt, (GhosttyMousePosition){ pos.x, pos.y });
 
-            ghostty_mouse_event_set(mevt, btn, GHOSTTY_MOUSE_ACTION_PRESS,
-                                    col, row, get_current_mods());
-            int n = ghostty_mouse_encoder_encode(menc, mevt,
-                                                  encode_buf, sizeof(encode_buf));
-            if (n > 0) {
-                int w = mt_pty_write(pty, encode_buf, (size_t)n);
-                if (w > 0) total_written += w;
-            }
+            total_written += write_encoded(
+                pty,
+                encode_buf,
+                ghostty_mouse_encoder_encode(menc, mevt, encode_buf, sizeof(encode_buf))
+            );
         } else {
-            /* No mouse tracking → scroll the viewport */
-            int lines = (int)(-wheel.y * 3);
-            ghostty_terminal_scroll_viewport(vt, lines);
+            GhosttyTerminalScrollViewport behavior = {
+                .tag = GHOSTTY_SCROLL_VIEWPORT_DELTA,
+                .value.delta = (intptr_t)(-wheel.y * 3.0f),
+            };
+            ghostty_terminal_scroll_viewport(vt, behavior);
         }
     }
 
-    /* Mouse button press/release (when mouse tracking is enabled) */
-    GhosttyTerminalMode mouse_mode;
-    ghostty_terminal_mode_get(vt, GHOSTTY_MODE_MOUSE_TRACKING, &mouse_mode);
+    /* Mouse buttons */
+    if (mouse_tracking) {
+        Vector2 pos = GetMousePosition();
+        GhosttyMousePosition gpos = { pos.x, pos.y };
+        GhosttyMods mods = get_current_mods();
 
-    if (mouse_mode.enabled) {
-        /* Left button */
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) ||
             IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+            ghostty_mouse_event_set_action(
+                mevt,
+                IsMouseButtonPressed(MOUSE_BUTTON_LEFT)
+                    ? GHOSTTY_MOUSE_ACTION_PRESS
+                    : GHOSTTY_MOUSE_ACTION_RELEASE
+            );
+            ghostty_mouse_event_set_button(mevt, GHOSTTY_MOUSE_BUTTON_LEFT);
+            ghostty_mouse_event_set_mods(mevt, mods);
+            ghostty_mouse_event_set_position(mevt, gpos);
 
-            Vector2 pos = GetMousePosition();
-            int col = (int)(pos.x / mt_renderer_cell_width(NULL));
-            int row = (int)(pos.y / mt_renderer_cell_height(NULL));
-
-            GhosttyMouseAction action = IsMouseButtonPressed(MOUSE_BUTTON_LEFT)
-                ? GHOSTTY_MOUSE_ACTION_PRESS
-                : GHOSTTY_MOUSE_ACTION_RELEASE;
-
-            ghostty_mouse_event_set(mevt, GHOSTTY_MOUSE_BUTTON_LEFT,
-                                    action, col, row, get_current_mods());
-            int n = ghostty_mouse_encoder_encode(menc, mevt,
-                                                  encode_buf, sizeof(encode_buf));
-            if (n > 0) {
-                int w = mt_pty_write(pty, encode_buf, (size_t)n);
-                if (w > 0) total_written += w;
-            }
+            total_written += write_encoded(
+                pty,
+                encode_buf,
+                ghostty_mouse_encoder_encode(menc, mevt, encode_buf, sizeof(encode_buf))
+            );
         }
 
-        /* Right button */
         if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) ||
             IsMouseButtonReleased(MOUSE_BUTTON_RIGHT)) {
+            ghostty_mouse_event_set_action(
+                mevt,
+                IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)
+                    ? GHOSTTY_MOUSE_ACTION_PRESS
+                    : GHOSTTY_MOUSE_ACTION_RELEASE
+            );
+            ghostty_mouse_event_set_button(mevt, GHOSTTY_MOUSE_BUTTON_RIGHT);
+            ghostty_mouse_event_set_mods(mevt, mods);
+            ghostty_mouse_event_set_position(mevt, gpos);
 
-            Vector2 pos = GetMousePosition();
-            int col = (int)(pos.x / mt_renderer_cell_width(NULL));
-            int row = (int)(pos.y / mt_renderer_cell_height(NULL));
-
-            GhosttyMouseAction action = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)
-                ? GHOSTTY_MOUSE_ACTION_PRESS
-                : GHOSTTY_MOUSE_ACTION_RELEASE;
-
-            ghostty_mouse_event_set(mevt, GHOSTTY_MOUSE_BUTTON_RIGHT,
-                                    action, col, row, get_current_mods());
-            int n = ghostty_mouse_encoder_encode(menc, mevt,
-                                                  encode_buf, sizeof(encode_buf));
-            if (n > 0) {
-                int w = mt_pty_write(pty, encode_buf, (size_t)n);
-                if (w > 0) total_written += w;
-            }
+            total_written += write_encoded(
+                pty,
+                encode_buf,
+                ghostty_mouse_encoder_encode(menc, mevt, encode_buf, sizeof(encode_buf))
+            );
         }
     }
 
-    /* --- Focus events --- */
-    if (IsWindowFocused()) {
+    /* Focus in/out */
+    bool focus_reporting = false;
+    ghostty_terminal_mode_get(vt, GHOSTTY_MODE_FOCUS_EVENT, &focus_reporting);
+
+    if (focus_reporting) {
         static bool was_focused = false;
-        if (!was_focused) {
-            int n = ghostty_focus_encode(vt, true, encode_buf, sizeof(encode_buf));
-            if (n > 0) {
-                int w = mt_pty_write(pty, encode_buf, (size_t)n);
-                if (w > 0) total_written += w;
-            }
-            was_focused = true;
-        }
-    } else {
-        static bool sent_blur = false;
-        if (!sent_blur) {
-            int n = ghostty_focus_encode(vt, false, encode_buf, sizeof(encode_buf));
-            if (n > 0) {
-                int w = mt_pty_write(pty, encode_buf, (size_t)n);
-                if (w > 0) total_written += w;
-            }
-            sent_blur = true;
+        bool focused = IsWindowFocused();
+
+        if (focused != was_focused) {
+            total_written += write_encoded(
+                pty,
+                encode_buf,
+                ghostty_focus_encode(vt, focused, encode_buf, sizeof(encode_buf))
+            );
+            was_focused = focused;
         }
     }
 

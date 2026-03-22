@@ -379,6 +379,20 @@ else
     fail "$test_name" "src/pty_windows.c is missing — Windows build will fail"
 fi
 
+test_name="src/ghostty/ghostty.h compatibility header exists"
+if [ -f "$REPO_ROOT/src/ghostty/ghostty.h" ]; then
+    pass "$test_name"
+else
+    fail "$test_name" "Missing Ghostty compatibility header used by the Windows build"
+fi
+
+test_name="CMakeLists.txt adds Ghostty source include directory"
+if grep -q 'ghostty_SOURCE_DIR}/include' "$REPO_ROOT/CMakeLists.txt"; then
+    pass "$test_name"
+else
+    fail "$test_name" "CMakeLists.txt should include Ghostty's source headers for compilation"
+fi
+
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------

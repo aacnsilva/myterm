@@ -47,6 +47,71 @@ static Color ghostty_to_raylib_color(GhosttyColorRgb gc)
     return (Color){ gc.r, gc.g, gc.b, 255 };
 }
 
+static GhosttyColorRgb rgba_to_ghostty_rgb(MtRgba c)
+{
+    return (GhosttyColorRgb){ c.r, c.g, c.b };
+}
+
+static GhosttyColorRgb resolve_style_color(GhosttyStyleColor color,
+                                           const GhosttyRenderStateColors *colors,
+                                           GhosttyColorRgb fallback)
+{
+    switch (color.tag) {
+    case GHOSTTY_STYLE_COLOR_RGB:
+        return color.value.rgb;
+    case GHOSTTY_STYLE_COLOR_PALETTE:
+        return colors->palette[color.value.palette];
+    default:
+        return fallback;
+    }
+}
+
+static int codepoint_to_utf8(uint32_t codepoint, char out[5])
+{
+    if (codepoint < 0x80) {
+        out[0] = (char)codepoint;
+        out[1] = '\0';
+        return 1;
+    }
+    if (codepoint < 0x800) {
+        out[0] = (char)(0xC0 | (codepoint >> 6));
+        out[1] = (char)(0x80 | (codepoint & 0x3F));
+        out[2] = '\0';
+        return 2;
+    }
+    if (codepoint < 0x10000) {
+        out[0] = (char)(0xE0 | (codepoint >> 12));
+        out[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (codepoint & 0x3F));
+        out[3] = '\0';
+        return 3;
+    }
+
+    out[0] = (char)(0xF0 | (codepoint >> 18));
+    out[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (codepoint & 0x3F));
+    out[4] = '\0';
+    return 4;
+}
+
+static void grapheme_to_utf8(const uint32_t *codepoints, uint32_t len,
+                             char *out, size_t out_size)
+{
+    size_t used = 0;
+    if (!out || out_size == 0) return;
+
+    out[0] = '\0';
+    for (uint32_t i = 0; i < len; i++) {
+        char tmp[5] = {0};
+        int n = codepoint_to_utf8(codepoints[i], tmp);
+        if (used + (size_t)n >= out_size) break;
+        memcpy(out + used, tmp, (size_t)n);
+        used += (size_t)n;
+    }
+    out[used] = '\0';
+}
+
 MtRenderer *mt_renderer_new(int width, int height, const char *title)
 {
     MtRenderer *r = calloc(1, sizeof(MtRenderer));
@@ -366,21 +431,24 @@ static void render_terminal(MtRenderer *r, MtTerminal *term, const MtTheme *them
     GhosttyTerminal    vt = mt_terminal_get_vt(term);
     GhosttyRenderState rs = mt_terminal_get_render_state(term);
 
-    ghostty_render_state_update(rs, vt);
+    if (ghostty_render_state_update(rs, vt) != GHOSTTY_SUCCESS) {
+        DrawRectangle((int)ox, (int)oy, (int)area_w, (int)area_h, rgba_to_color(theme->bg));
+        return;
+    }
 
-    GhosttyColorPalette palette;
-    ghostty_render_state_colors_get(rs, &palette);
+    GhosttyRenderStateColors colors = GHOSTTY_INIT_SIZED(GhosttyRenderStateColors);
+    ghostty_render_state_colors_get(rs, &colors);
 
     Color bg_color = rgba_to_color(theme->bg);
     Color fg_color = rgba_to_color(theme->fg);
+    GhosttyColorRgb default_bg = rgba_to_ghostty_rgb(theme->bg);
+    GhosttyColorRgb default_fg = rgba_to_ghostty_rgb(theme->fg);
 
-    /* Fill terminal background */
     DrawRectangle((int)ox, (int)oy, (int)area_w, (int)area_h, bg_color);
 
     int term_rows = mt_terminal_rows(term);
     int term_cols = mt_terminal_cols(term);
 
-    /* Search match positions (for highlighting) */
     int search_match_count = 0;
     int search_current = -1;
     if (search && mt_search_is_active(search)) {
@@ -388,148 +456,182 @@ static void render_terminal(MtRenderer *r, MtTerminal *term, const MtTheme *them
         search_current = mt_search_current_index(search);
     }
 
-    GhosttyRowIterator row_iter;
-    ghostty_render_state_row_iterator_new(rs, &row_iter);
+    GhosttyRenderStateRowIterator row_iter = NULL;
+    if (ghostty_render_state_row_iterator_new(NULL, &row_iter) != GHOSTTY_SUCCESS) {
+        return;
+    }
 
-    for (int row = 0; row < term_rows; row++) {
-        if (!ghostty_render_state_row_iterator_next(&row_iter)) break;
+    if (ghostty_render_state_get(rs, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, &row_iter) != GHOSTTY_SUCCESS) {
+        ghostty_render_state_row_iterator_free(row_iter);
+        return;
+    }
 
+    GhosttyRenderStateRowCells cells = NULL;
+    if (ghostty_render_state_row_cells_new(NULL, &cells) != GHOSTTY_SUCCESS) {
+        ghostty_render_state_row_iterator_free(row_iter);
+        return;
+    }
+
+    int row = 0;
+    while (row < term_rows && ghostty_render_state_row_iterator_next(row_iter)) {
         float y = oy + (float)row * r->cell_h;
         if (y > oy + area_h) break;
 
-        GhosttyCell cell;
+        if (ghostty_render_state_row_get(row_iter, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &cells) != GHOSTTY_SUCCESS) {
+            row++;
+            continue;
+        }
+
         int col = 0;
-        while (col < term_cols &&
-               ghostty_render_state_row_cells_next(&row_iter, &cell)) {
+        while (col < term_cols && ghostty_render_state_row_cells_next(cells)) {
+            GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
+            GhosttyCell raw_cell = 0;
+            GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
+            uint32_t grapheme_len = 0;
+
+            ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style);
+            ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw_cell);
+            ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN, &grapheme_len);
+            ghostty_cell_get(raw_cell, GHOSTTY_CELL_DATA_WIDE, &wide);
+
+            int cell_span = (wide == GHOSTTY_CELL_WIDE_WIDE) ? 2 : 1;
+            if (wide == GHOSTTY_CELL_WIDE_SPACER_TAIL || wide == GHOSTTY_CELL_WIDE_SPACER_HEAD) {
+                cell_span = 1;
+            }
 
             float x = ox + (float)col * r->cell_w;
+            float cell_w = r->cell_w * (float)cell_span;
 
-            /* Background */
-            Color bg = bg_color;
-            if (cell.style.flags & GHOSTTY_STYLE_FLAG_BG) {
-                if (cell.style.bg.type == GHOSTTY_COLOR_TYPE_RGB) {
-                    bg = ghostty_to_raylib_color(cell.style.bg.rgb);
-                } else if (cell.style.bg.type == GHOSTTY_COLOR_TYPE_PALETTE) {
-                    bg = ghostty_to_raylib_color(palette.colors[cell.style.bg.palette_index]);
-                }
-            }
-            DrawRectangle((int)x, (int)y, (int)r->cell_w, (int)r->cell_h, bg);
+            Color bg = ghostty_to_raylib_color(resolve_style_color(style.bg_color, &colors, default_bg));
+            DrawRectangle((int)x, (int)y, (int)cell_w, (int)r->cell_h, bg);
 
-            /* Search highlight */
             if (search_match_count > 0) {
                 for (int m = 0; m < search_match_count; m++) {
                     const MtSearchMatch *match = mt_search_get_match(search, m);
                     if (match && match->row == row &&
-                        col >= match->col_start && col < match->col_end) {
+                        col < match->col_end && (col + cell_span) > match->col_start) {
                         Color hl = (m == search_current)
                             ? rgba_to_color(theme->search_current)
                             : rgba_to_color(theme->search_match);
-                        DrawRectangle((int)x, (int)y, (int)r->cell_w, (int)r->cell_h, hl);
+                        DrawRectangle((int)x, (int)y, (int)cell_w, (int)r->cell_h, hl);
                         break;
                     }
                 }
             }
 
-            /* Foreground */
-            Color fg = fg_color;
-            if (cell.style.flags & GHOSTTY_STYLE_FLAG_FG) {
-                if (cell.style.fg.type == GHOSTTY_COLOR_TYPE_RGB) {
-                    fg = ghostty_to_raylib_color(cell.style.fg.rgb);
-                } else if (cell.style.fg.type == GHOSTTY_COLOR_TYPE_PALETTE) {
-                    fg = ghostty_to_raylib_color(palette.colors[cell.style.fg.palette_index]);
-                }
-            }
-
-            if (cell.style.flags & GHOSTTY_STYLE_FLAG_BOLD) {
+            Color fg = ghostty_to_raylib_color(resolve_style_color(style.fg_color, &colors, default_fg));
+            if (style.bold) {
                 fg.r = (uint8_t)(fg.r + (255 - fg.r) / 3);
                 fg.g = (uint8_t)(fg.g + (255 - fg.g) / 3);
                 fg.b = (uint8_t)(fg.b + (255 - fg.b) / 3);
             }
 
-            /* Glyph */
-            if (cell.codepoint != 0 && cell.codepoint != ' ') {
-                char utf8[5] = {0};
-                if (cell.codepoint < 0x80) {
-                    utf8[0] = (char)cell.codepoint;
-                } else if (cell.codepoint < 0x800) {
-                    utf8[0] = (char)(0xC0 | (cell.codepoint >> 6));
-                    utf8[1] = (char)(0x80 | (cell.codepoint & 0x3F));
-                } else if (cell.codepoint < 0x10000) {
-                    utf8[0] = (char)(0xE0 | (cell.codepoint >> 12));
-                    utf8[1] = (char)(0x80 | ((cell.codepoint >> 6) & 0x3F));
-                    utf8[2] = (char)(0x80 | (cell.codepoint & 0x3F));
-                } else {
-                    utf8[0] = (char)(0xF0 | (cell.codepoint >> 18));
-                    utf8[1] = (char)(0x80 | ((cell.codepoint >> 12) & 0x3F));
-                    utf8[2] = (char)(0x80 | ((cell.codepoint >> 6) & 0x3F));
-                    utf8[3] = (char)(0x80 | (cell.codepoint & 0x3F));
+            if (grapheme_len > 0 && wide != GHOSTTY_CELL_WIDE_SPACER_TAIL && wide != GHOSTTY_CELL_WIDE_SPACER_HEAD) {
+                uint32_t stack_codepoints[8];
+                uint32_t *codepoints = stack_codepoints;
+                if (grapheme_len > (uint32_t)(sizeof(stack_codepoints) / sizeof(stack_codepoints[0]))) {
+                    codepoints = calloc(grapheme_len, sizeof(uint32_t));
                 }
 
-                Vector2 pos = { x, y };
-                if (cell.style.flags & GHOSTTY_STYLE_FLAG_ITALIC) {
-                    pos.x += 2.0f;
-                }
+                if (codepoints) {
+                    char utf8[64];
+                    ghostty_render_state_row_cells_get(
+                        cells,
+                        GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF,
+                        codepoints
+                    );
+                    grapheme_to_utf8(codepoints, grapheme_len, utf8, sizeof(utf8));
 
-                DrawTextEx(r->font, utf8, pos, r->font_size, 0, fg);
+                    Vector2 pos = { x, y };
+                    if (style.italic) pos.x += 2.0f;
 
-                if (cell.style.flags & GHOSTTY_STYLE_FLAG_BOLD) {
-                    pos.x += 1.0f;
                     DrawTextEx(r->font, utf8, pos, r->font_size, 0, fg);
+                    if (style.bold) {
+                        pos.x += 1.0f;
+                        DrawTextEx(r->font, utf8, pos, r->font_size, 0, fg);
+                    }
+
+                    if (codepoints != stack_codepoints) {
+                        free(codepoints);
+                    }
                 }
             }
 
-            /* Underline */
-            if (cell.style.flags & GHOSTTY_STYLE_FLAG_UNDERLINE) {
+            if (style.underline) {
                 float uy = y + r->cell_h - 2.0f;
-                DrawLine((int)x, (int)uy, (int)(x + r->cell_w), (int)uy, fg);
+                DrawLine((int)x, (int)uy, (int)(x + cell_w), (int)uy, fg);
             }
 
-            /* Strikethrough */
-            if (cell.style.flags & GHOSTTY_STYLE_FLAG_STRIKETHROUGH) {
+            if (style.strikethrough) {
                 float sy = y + r->cell_h / 2.0f;
-                DrawLine((int)x, (int)sy, (int)(x + r->cell_w), (int)sy, fg);
+                DrawLine((int)x, (int)sy, (int)(x + cell_w), (int)sy, fg);
             }
 
-            col += cell.wide ? 2 : 1;
+            col += cell_span;
         }
+
+        row++;
     }
 
-    /* Cursor */
-    GhosttyTerminalCursor cursor;
-    ghostty_terminal_get_cursor(vt, &cursor);
-    if (cursor.visible) {
-        float cx = ox + (float)cursor.col * r->cell_w;
-        float cy = oy + (float)cursor.row * r->cell_h;
+    ghostty_render_state_row_cells_free(cells);
+    ghostty_render_state_row_iterator_free(row_iter);
+
+    bool cursor_visible = false;
+    bool cursor_in_viewport = false;
+    ghostty_render_state_get(rs, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE, &cursor_visible);
+    ghostty_render_state_get(rs, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE, &cursor_in_viewport);
+
+    if (cursor_visible && cursor_in_viewport) {
+        uint16_t cursor_x = 0;
+        uint16_t cursor_y = 0;
+        GhosttyRenderStateCursorVisualStyle cursor_style = GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK;
         Color cursor_color = rgba_to_color(theme->cursor);
 
-        switch (cursor.shape) {
-        case GHOSTTY_CURSOR_BLOCK:
-            DrawRectangle((int)cx, (int)cy, (int)r->cell_w, (int)r->cell_h, cursor_color);
-            break;
-        case GHOSTTY_CURSOR_BAR:
+        ghostty_render_state_get(rs, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X, &cursor_x);
+        ghostty_render_state_get(rs, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y, &cursor_y);
+        ghostty_render_state_get(rs, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE, &cursor_style);
+
+        float cx = ox + (float)cursor_x * r->cell_w;
+        float cy = oy + (float)cursor_y * r->cell_h;
+
+        switch (cursor_style) {
+        case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR:
             DrawRectangle((int)cx, (int)cy, 2, (int)r->cell_h, cursor_color);
             break;
-        case GHOSTTY_CURSOR_UNDERLINE:
-            DrawRectangle((int)cx, (int)(cy + r->cell_h - 2),
-                          (int)r->cell_w, 2, cursor_color);
+        case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE:
+            DrawRectangle((int)cx, (int)(cy + r->cell_h - 2), (int)r->cell_w, 2, cursor_color);
+            break;
+        case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW:
+            DrawRectangleLines((int)cx, (int)cy, (int)r->cell_w, (int)r->cell_h, cursor_color);
+            break;
+        case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK:
+        default:
+            DrawRectangle((int)cx, (int)cy, (int)r->cell_w, (int)r->cell_h, cursor_color);
             break;
         }
     }
 
-    /* Scrollbar */
-    GhosttyTerminalScrollbar scrollbar;
-    ghostty_terminal_get_scrollbar(vt, &scrollbar);
-    if (scrollbar.visible) {
+    GhosttyTerminalScrollbar scrollbar = {0};
+    if (ghostty_terminal_get(vt, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &scrollbar) == GHOSTTY_SUCCESS &&
+        scrollbar.total > scrollbar.len && scrollbar.total > 0) {
         int bar_w = 6;
         int bar_x = (int)(ox + area_w) - bar_w - 2;
-        float thumb_h = area_h * scrollbar.thumb_size;
-        float thumb_y = oy + area_h * scrollbar.thumb_offset;
+        float thumb_h = area_h * ((float)scrollbar.len / (float)scrollbar.total);
+        if (thumb_h < 16.0f) thumb_h = 16.0f;
+        if (thumb_h > area_h) thumb_h = area_h;
 
-        DrawRectangle(bar_x, (int)oy, bar_w, (int)area_h,
-                      rgba_to_color(theme->scrollbar_bg));
+        float scroll_range = (float)(scrollbar.total - scrollbar.len);
+        float track_range = area_h - thumb_h;
+        float thumb_y = oy;
+        if (scroll_range > 0.0f && track_range > 0.0f) {
+            thumb_y += ((float)scrollbar.offset / scroll_range) * track_range;
+        }
+
+        DrawRectangle(bar_x, (int)oy, bar_w, (int)area_h, rgba_to_color(theme->scrollbar_bg));
         DrawRectangleRounded(
             (Rectangle){ (float)bar_x, thumb_y, (float)bar_w, thumb_h },
-            0.5f, 4, rgba_to_color(theme->scrollbar_thumb));
+            0.5f, 4, rgba_to_color(theme->scrollbar_thumb)
+        );
     }
 }
 

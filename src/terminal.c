@@ -42,7 +42,7 @@ MtTerminal *mt_terminal_new(int cols, int rows)
     }
 
     /* Render state — used to snapshot the terminal for drawing */
-    err = ghostty_render_state_new(&t->render_state);
+    err = ghostty_render_state_new(NULL, &t->render_state);
     if (err != GHOSTTY_SUCCESS) {
         ghostty_terminal_destroy(t->vt);
         free(t);
@@ -50,7 +50,7 @@ MtTerminal *mt_terminal_new(int cols, int rows)
     }
 
     /* Input encoders — translate platform key/mouse events to VT sequences */
-    err = ghostty_key_encoder_new(&t->key_encoder);
+    err = ghostty_key_encoder_new(NULL, &t->key_encoder);
     if (err != GHOSTTY_SUCCESS) {
         ghostty_render_state_destroy(t->render_state);
         ghostty_terminal_destroy(t->vt);
@@ -67,7 +67,7 @@ MtTerminal *mt_terminal_new(int cols, int rows)
         return NULL;
     }
 
-    err = ghostty_mouse_encoder_new(&t->mouse_encoder);
+    err = ghostty_mouse_encoder_new(NULL, &t->mouse_encoder);
     if (err != GHOSTTY_SUCCESS) {
         ghostty_key_encoder_event_destroy(t->key_event);
         ghostty_key_encoder_destroy(t->key_encoder);
@@ -112,7 +112,7 @@ void mt_terminal_destroy(MtTerminal *t)
 void mt_terminal_feed(MtTerminal *t, const char *data, size_t len)
 {
     if (!t || !t->valid || !data || len == 0) return;
-    ghostty_terminal_vt_write(t->vt, data, len);
+    ghostty_terminal_vt_write(t->vt, (const uint8_t *)data, len);
 }
 
 void mt_terminal_resize(MtTerminal *t, int cols, int rows)
