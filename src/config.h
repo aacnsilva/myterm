@@ -17,7 +17,7 @@ typedef struct {
     uint8_t r, g, b, a;
 } MtRgba;
 
-typedef struct {
+typedef struct MtTheme {
     char    name[64];
     MtRgba  bg;
     MtRgba  fg;
