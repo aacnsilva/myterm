@@ -13,13 +13,32 @@ option(MYTERM_BUILD_TESTS "Build unit tests" ON)
 # --------------------------------------------------------------------------
 # libghostty-vt  (uses Ghostty's own CMakeLists.txt which invokes zig build)
 #
-# Ghostty's CMakeLists.txt creates an IMPORTED SHARED library target
-# called "ghostty-vt" with proper include dirs and library location.
+# Ghostty exposes both a shared target (ghostty-vt) and a static target
+# (ghostty-vt-static). On Windows we intentionally link the static target:
+#   - the shared target requires an import library path that Ghostty's CMake
+#     wrapper does not model as a proper build output for Ninja
+#   - release artifacts should stay self-contained and not require shipping
+#     ghostty-vt.dll alongside myterm.exe
+#   - building the static library with -Dsimd=false avoids extra transitive
+#     C++/SIMD dependencies in downstream consumers
+#
 # Requires: zig 0.15.x on PATH.
 #
 # Reference: https://github.com/ghostty-org/ghostling
 # --------------------------------------------------------------------------
 include(FetchContent)
+
+set(MYTERM_GHOSTTY_TARGET ghostty-vt)
+if(WIN32)
+    set(MYTERM_GHOSTTY_TARGET ghostty-vt-static)
+
+    if(NOT DEFINED GHOSTTY_ZIG_BUILD_FLAGS)
+        set(GHOSTTY_ZIG_BUILD_FLAGS "-Dsimd=false" CACHE STRING
+            "Additional flags to pass to Ghostty's zig build"
+            FORCE
+        )
+    endif()
+endif()
 
 # Pin to a known-good commit for reproducible builds.
 # Update this hash when upgrading ghostty.
@@ -29,18 +48,6 @@ FetchContent_Declare(ghostty
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(ghostty)
-
-# Ghostty's CMakeLists.txt declares ghostty-vt as SHARED IMPORTED but does not
-# set IMPORTED_IMPLIB on Windows.  CMake requires this property for shared
-# imported targets on Windows (the .lib import library that accompanies the
-# .dll).  Derive it from IMPORTED_LOCATION by replacing the extension.
-if(WIN32)
-    get_target_property(_ghostty_loc ghostty-vt IMPORTED_LOCATION)
-    if(_ghostty_loc)
-        string(REGEX REPLACE "\\.[^.]+$" ".lib" _ghostty_implib "${_ghostty_loc}")
-        set_target_properties(ghostty-vt PROPERTIES IMPORTED_IMPLIB "${_ghostty_implib}")
-    endif()
-endif()
 
 # --------------------------------------------------------------------------
 # Raylib  (cross-platform windowing + 2D rendering)
@@ -83,7 +90,7 @@ target_include_directories(myterm_lib PUBLIC
 )
 
 target_link_libraries(myterm_lib PUBLIC
-    ghostty-vt
+    ${MYTERM_GHOSTTY_TARGET}
     raylib
 )
 

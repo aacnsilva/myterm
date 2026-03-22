@@ -264,6 +264,20 @@ else
     fail "$test_name" "CI workflow does not run 'make test'"
 fi
 
+test_name="ci.yml has Windows build job"
+if grep -q '^\s*build-windows:' "$CI_YML"; then
+    pass "$test_name"
+else
+    fail "$test_name" "CI workflow should include a Windows build job"
+fi
+
+test_name="ci.yml installs Zig for Windows build"
+if grep -q 'mlugg/setup-zig@v2' "$CI_YML"; then
+    pass "$test_name"
+else
+    fail "$test_name" "CI workflow should install Zig for the Windows build"
+fi
+
 # ---------------------------------------------------------------------------
 # 14. Source files referenced in tests/Makefile exist
 # ---------------------------------------------------------------------------
@@ -311,27 +325,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 16b. CMakeLists.txt sets IMPORTED_IMPLIB for ghostty-vt on Windows
+# 16b. Windows links Ghostty statically to avoid missing import-library rules
 # ---------------------------------------------------------------------------
-test_name="CMakeLists.txt sets IMPORTED_IMPLIB for Windows"
-if grep -q 'IMPORTED_IMPLIB' "$REPO_ROOT/CMakeLists.txt"; then
+test_name="CMakeLists.txt selects ghostty-vt-static on Windows"
+if awk '/if\(WIN32\)/,/endif\(\)/' "$REPO_ROOT/CMakeLists.txt" | grep -q 'MYTERM_GHOSTTY_TARGET ghostty-vt-static'; then
     pass "$test_name"
 else
-    fail "$test_name" "Missing IMPORTED_IMPLIB workaround — Windows CMake configure will fail"
+    fail "$test_name" "Windows builds should link ghostty-vt-static"
 fi
 
-test_name="IMPORTED_IMPLIB is guarded by WIN32 check"
-if awk '/if\(WIN32\)/,/endif\(\)/' "$REPO_ROOT/CMakeLists.txt" | grep -q 'IMPORTED_IMPLIB'; then
+test_name="myterm_lib links against configurable Ghostty target"
+if grep -q '\${MYTERM_GHOSTTY_TARGET}' "$REPO_ROOT/CMakeLists.txt"; then
     pass "$test_name"
 else
-    fail "$test_name" "IMPORTED_IMPLIB should be inside an if(WIN32) block"
+    fail "$test_name" "myterm_lib should link against \${MYTERM_GHOSTTY_TARGET}"
 fi
 
-test_name="IMPORTED_IMPLIB derived from ghostty-vt IMPORTED_LOCATION"
-if grep -q 'get_target_property.*ghostty-vt.*IMPORTED_LOCATION' "$REPO_ROOT/CMakeLists.txt"; then
+test_name="Windows disables Ghostty SIMD for static linking"
+if awk '/if\(WIN32\)/,/endif\(\)/' "$REPO_ROOT/CMakeLists.txt" | grep -q 'GHOSTTY_ZIG_BUILD_FLAGS ".*-Dsimd=false'; then
     pass "$test_name"
 else
-    fail "$test_name" "Should derive IMPORTED_IMPLIB from the ghostty-vt IMPORTED_LOCATION"
+    fail "$test_name" "Windows static Ghostty build should set -Dsimd=false"
 fi
 
 # ---------------------------------------------------------------------------

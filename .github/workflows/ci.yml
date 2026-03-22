@@ -24,3 +24,29 @@ jobs:
       - name: Build and run tests
         working-directory: tests
         run: make test
+
+  # ---------------------------------------------------------------------------
+  # Full Windows build — catches Ghostty/Zig/CMake integration regressions
+  # before a release tag is pushed.
+  # ---------------------------------------------------------------------------
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.0
+
+      - name: Install Ninja
+        run: choco install ninja -y --no-progress
+
+      - name: Configure CMake
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMYTERM_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build --config Release
+        timeout-minutes: 30
