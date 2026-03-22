@@ -53,3 +53,18 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
         timeout-minutes: 30
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File tests/smoke_test.ps1 `
+            -ExePath build/myterm.exe `
+            -ScreenshotPath smoke_screenshot.png
+
+      - name: Upload smoke test screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-screenshot
+          path: smoke_screenshot.png
+          if-no-files-found: ignore
