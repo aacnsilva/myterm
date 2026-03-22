@@ -21,6 +21,66 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+
+static int codepoint_to_utf8(uint32_t codepoint, char out[5])
+{
+    if (codepoint < 0x80) {
+        out[0] = (char)codepoint;
+        out[1] = '\0';
+        return 1;
+    }
+    if (codepoint < 0x800) {
+        out[0] = (char)(0xC0 | (codepoint >> 6));
+        out[1] = (char)(0x80 | (codepoint & 0x3F));
+        out[2] = '\0';
+        return 2;
+    }
+    if (codepoint < 0x10000) {
+        out[0] = (char)(0xE0 | (codepoint >> 12));
+        out[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (codepoint & 0x3F));
+        out[3] = '\0';
+        return 3;
+    }
+
+    out[0] = (char)(0xF0 | (codepoint >> 18));
+    out[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (codepoint & 0x3F));
+    out[4] = '\0';
+    return 4;
+}
+
+static size_t utf8_prev_char_start(const char *s, size_t len)
+{
+    while (len > 0 && (((unsigned char)s[len - 1]) & 0xC0) == 0x80) {
+        len--;
+    }
+    return len > 0 ? len - 1 : 0;
+}
+
+static void append_codepoint_utf8(char *dst, size_t cap, int ch)
+{
+    if (!dst || cap == 0 || ch < 32) return;
+
+    size_t len = strlen(dst);
+    char utf8[5] = {0};
+    int n = codepoint_to_utf8((uint32_t)ch, utf8);
+    if (len + (size_t)n >= cap) return;
+
+    memcpy(dst + len, utf8, (size_t)n);
+    dst[len + (size_t)n] = '\0';
+}
+
+static void backspace_utf8(char *dst)
+{
+    if (!dst) return;
+    size_t len = strlen(dst);
+    if (len == 0) return;
+    size_t start = utf8_prev_char_start(dst, len);
+    dst[start] = '\0';
+}
 
 /* Check if Ctrl+Shift+<key> is pressed */
 static bool ctrl_shift_pressed(int key)
@@ -209,8 +269,12 @@ int main(int argc, char *argv[])
         }
 
         if (mt_tabs_is_renaming(tabs, mt_tabs_active_index(tabs))) {
+#ifdef _WIN32
+            goto render;
+#else
             handle_tab_rename_input(tabs);
             goto render;
+#endif
         }
 
         if (IsKeyPressed(KEY_F2) || ctrl_shift_pressed(KEY_R)) {
@@ -377,25 +441,18 @@ int main(int argc, char *argv[])
                 char query[MT_SEARCH_MAX_QUERY];
                 strncpy(query, mt_search_get_query(search), MT_SEARCH_MAX_QUERY - 1);
                 query[MT_SEARCH_MAX_QUERY - 1] = '\0';
-                size_t len = strlen(query);
-                if (ch_in >= 32 && len < MT_SEARCH_MAX_QUERY - 2) {
-                    query[len] = (char)ch_in;
-                    query[len + 1] = '\0';
-                    mt_search_set_query(search, query);
-                    mt_search_execute(search, focused_term);
-                }
+                append_codepoint_utf8(query, sizeof(query), ch_in);
+                mt_search_set_query(search, query);
+                mt_search_execute(search, focused_term);
             }
 
             if (IsKeyPressed(KEY_BACKSPACE)) {
                 char query[MT_SEARCH_MAX_QUERY];
                 strncpy(query, mt_search_get_query(search), MT_SEARCH_MAX_QUERY - 1);
                 query[MT_SEARCH_MAX_QUERY - 1] = '\0';
-                size_t len = strlen(query);
-                if (len > 0) {
-                    query[len - 1] = '\0';
-                    mt_search_set_query(search, query);
-                    mt_search_execute(search, focused_term);
-                }
+                backspace_utf8(query);
+                mt_search_set_query(search, query);
+                mt_search_execute(search, focused_term);
             }
 
             goto render;

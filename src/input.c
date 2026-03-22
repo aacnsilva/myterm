@@ -14,6 +14,45 @@
 #include <stdint.h>
 #include <string.h>
 
+static int codepoint_to_utf8(uint32_t codepoint, char out[5])
+{
+    if (codepoint < 0x80) {
+        out[0] = (char)codepoint;
+        out[1] = '\0';
+        return 1;
+    }
+    if (codepoint < 0x800) {
+        out[0] = (char)(0xC0 | (codepoint >> 6));
+        out[1] = (char)(0x80 | (codepoint & 0x3F));
+        out[2] = '\0';
+        return 2;
+    }
+    if (codepoint < 0x10000) {
+        out[0] = (char)(0xE0 | (codepoint >> 12));
+        out[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (codepoint & 0x3F));
+        out[3] = '\0';
+        return 3;
+    }
+
+    out[0] = (char)(0xF0 | (codepoint >> 18));
+    out[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (codepoint & 0x3F));
+    out[4] = '\0';
+    return 4;
+}
+
+static bool altgr_active(void)
+{
+#ifdef _WIN32
+    return IsKeyDown(KEY_RIGHT_ALT) &&
+           (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL));
+#else
+    return false;
+#endif
+}
+
 /* Map a Raylib key to a Ghostty key code. */
 static GhosttyKey raylib_to_ghostty_key(int key)
 {
@@ -134,30 +173,10 @@ int mt_input_process(MtTerminal *term, MtPty *pty)
     int ch;
     while ((ch = GetCharPressed()) != 0) {
         char utf8[5] = {0};
-        int len = 0;
-
-        if (ch < 0x80) {
-            utf8[0] = (char)ch;
-            len = 1;
-        } else if (ch < 0x800) {
-            utf8[0] = (char)(0xC0 | (ch >> 6));
-            utf8[1] = (char)(0x80 | (ch & 0x3F));
-            len = 2;
-        } else if (ch < 0x10000) {
-            utf8[0] = (char)(0xE0 | (ch >> 12));
-            utf8[1] = (char)(0x80 | ((ch >> 6) & 0x3F));
-            utf8[2] = (char)(0x80 | (ch & 0x3F));
-            len = 3;
-        } else {
-            utf8[0] = (char)(0xF0 | (ch >> 18));
-            utf8[1] = (char)(0x80 | ((ch >> 12) & 0x3F));
-            utf8[2] = (char)(0x80 | ((ch >> 6) & 0x3F));
-            utf8[3] = (char)(0x80 | (ch & 0x3F));
-            len = 4;
-        }
+        int len = codepoint_to_utf8((uint32_t)ch, utf8);
 
         GhosttyMods mods = get_current_mods();
-        if (!(mods & (GHOSTTY_MODS_CTRL | GHOSTTY_MODS_ALT))) {
+        if (!(mods & (GHOSTTY_MODS_CTRL | GHOSTTY_MODS_ALT)) || altgr_active()) {
             total_written += write_encoded(pty, utf8, len);
         }
     }
@@ -258,7 +277,7 @@ int mt_input_process(MtTerminal *term, MtPty *pty)
             key == KEY_APOSTROPHE || key == KEY_COMMA ||
             key == KEY_PERIOD || key == KEY_SLASH || key == KEY_GRAVE;
 
-        if (printable_key && !(mods & (GHOSTTY_MODS_CTRL | GHOSTTY_MODS_ALT))) {
+        if (printable_key && (!(mods & (GHOSTTY_MODS_CTRL | GHOSTTY_MODS_ALT)) || altgr_active())) {
             continue;
         }
 

@@ -11,6 +11,44 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <stdint.h>
+
+static int codepoint_to_utf8(uint32_t codepoint, char out[5])
+{
+    if (codepoint < 0x80) {
+        out[0] = (char)codepoint;
+        out[1] = '\0';
+        return 1;
+    }
+    if (codepoint < 0x800) {
+        out[0] = (char)(0xC0 | (codepoint >> 6));
+        out[1] = (char)(0x80 | (codepoint & 0x3F));
+        out[2] = '\0';
+        return 2;
+    }
+    if (codepoint < 0x10000) {
+        out[0] = (char)(0xE0 | (codepoint >> 12));
+        out[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (codepoint & 0x3F));
+        out[3] = '\0';
+        return 3;
+    }
+
+    out[0] = (char)(0xF0 | (codepoint >> 18));
+    out[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (codepoint & 0x3F));
+    out[4] = '\0';
+    return 4;
+}
+
+static size_t utf8_prev_char_start(const char *s, size_t len)
+{
+    while (len > 0 && (((unsigned char)s[len - 1]) & 0xC0) == 0x80) {
+        len--;
+    }
+    return len > 0 ? len - 1 : 0;
+}
 
 struct MtTabManager {
     MtTab  tabs[MT_MAX_TABS];
@@ -277,18 +315,24 @@ void mt_tabs_rename_backspace(MtTabManager *tm, int index)
     MtTab *tab = &tm->tabs[index];
     size_t len = strlen(tab->rename_buf);
     if (len > 0) {
-        tab->rename_buf[len - 1] = '\0';
+        size_t start = utf8_prev_char_start(tab->rename_buf, len);
+        tab->rename_buf[start] = '\0';
     }
 }
 
 void mt_tabs_rename_append(MtTabManager *tm, int index, int ch)
 {
     if (!tm || index < 0 || index >= tm->count) return;
+    if (ch < 32) return;
+
     MtTab *tab = &tm->tabs[index];
     size_t len = strlen(tab->rename_buf);
-    if (ch < 32 || len >= MT_TAB_MAX_TITLE - 2) return;
-    tab->rename_buf[len] = (char)ch;
-    tab->rename_buf[len + 1] = '\0';
+    char utf8[5] = {0};
+    int n = codepoint_to_utf8((uint32_t)ch, utf8);
+    if (len + (size_t)n >= MT_TAB_MAX_TITLE) return;
+
+    memcpy(tab->rename_buf + len, utf8, (size_t)n);
+    tab->rename_buf[len + (size_t)n] = '\0';
 }
 
 bool mt_tabs_is_renaming(const MtTabManager *tm, int index)

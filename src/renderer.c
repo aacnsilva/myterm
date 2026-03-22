@@ -25,12 +25,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include "native_tabs_windows.h"
 
 #define SEARCH_BAR_HEIGHT 32.0f
 #define TAB_PADDING       12.0f
 #define TAB_CLOSE_SIZE    14.0f
-#define RENAME_CURSOR_PAD 2.0f
-#define UI_DOUBLE_CLICK_S 0.35
+#define RENAME_CURSOR_PAD   2.0f
+#define UI_DOUBLE_CLICK_S   0.35
+#define PANE_INSET          4.0f
+#define PANE_HEADER_HEIGHT 22.0f
 
 typedef struct {
     int row0, col0;
@@ -56,6 +59,10 @@ struct MtRenderer {
     int    drag_tab_index;
     int    last_tab_click;
     double last_tab_click_time;
+
+#ifdef _WIN32
+    struct MtNativeTabs *native_tabs;
+#endif
 };
 
 static Color rgba_to_color(MtRgba c)
@@ -116,6 +123,8 @@ static int codepoint_to_utf8(uint32_t codepoint, char out[5])
     return 4;
 }
 
+static void selection_clear(MtRenderer *r);
+
 static int grapheme_to_utf8_len(const uint32_t *codepoints, uint32_t len,
                                 char *out, size_t out_size)
 {
@@ -132,6 +141,41 @@ static int grapheme_to_utf8_len(const uint32_t *codepoints, uint32_t len,
     }
     out[used] = '\0';
     return (int)used;
+}
+
+static int *build_font_codepoints(int *out_count)
+{
+    if (out_count) *out_count = 0;
+
+    const struct {
+        int start;
+        int end;
+    } ranges[] = {
+        { 0x0020, 0x00FF },
+        { 0x0100, 0x024F },
+        { 0x2000, 0x206F },
+        { 0x2190, 0x21FF },
+        { 0x2500, 0x259F },
+        { 0x25A0, 0x25FF },
+    };
+
+    int total = 0;
+    for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
+        total += ranges[i].end - ranges[i].start + 1;
+    }
+
+    int *codepoints = calloc((size_t)total, sizeof(int));
+    if (!codepoints) return NULL;
+
+    int idx = 0;
+    for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
+        for (int cp = ranges[i].start; cp <= ranges[i].end; cp++) {
+            codepoints[idx++] = cp;
+        }
+    }
+
+    if (out_count) *out_count = idx;
+    return codepoints;
 }
 
 MtRenderer *mt_renderer_new(int width, int height, const char *title)
@@ -157,9 +201,12 @@ MtRenderer *mt_renderer_new(int width, int height, const char *title)
     };
 
     r->font_loaded = false;
+    int font_codepoint_count = 0;
+    int *font_codepoints = build_font_codepoints(&font_codepoint_count);
     for (int i = 0; font_paths[i] != NULL; i++) {
         if (FileExists(font_paths[i])) {
-            r->font = LoadFontEx(font_paths[i], (int)r->font_size, NULL, 0);
+            r->font = LoadFontEx(font_paths[i], (int)r->font_size,
+                                 font_codepoints, font_codepoint_count);
             if (r->font.glyphCount > 0) {
                 r->font_loaded = true;
                 SetTextureFilter(r->font.texture, TEXTURE_FILTER_BILINEAR);
@@ -167,6 +214,7 @@ MtRenderer *mt_renderer_new(int width, int height, const char *title)
             }
         }
     }
+    free(font_codepoints);
 
     if (!r->font_loaded) {
         r->font = GetFontDefault();
@@ -182,6 +230,12 @@ MtRenderer *mt_renderer_new(int width, int height, const char *title)
 void mt_renderer_destroy(MtRenderer *r)
 {
     if (!r) return;
+#ifdef _WIN32
+    if (r->native_tabs) {
+        mt_native_tabs_destroy(r->native_tabs);
+        r->native_tabs = NULL;
+    }
+#endif
     if (r->font_loaded) {
         UnloadFont(r->font);
     }
@@ -473,6 +527,7 @@ bool mt_renderer_copy_selection(MtRenderer *r)
  * Tab bar rendering
  * -------------------------------------------------------------------------- */
 
+#ifndef _WIN32
 static void render_tab_bar(MtRenderer *r, MtTabManager *tabs, const MtTheme *theme)
 {
     int sw = GetScreenWidth();
@@ -671,6 +726,7 @@ static bool handle_tab_bar_ui(MtRenderer *r, MtTabManager *tabs, int sw)
 
     return false;
 }
+#endif
 
 /* --------------------------------------------------------------------------
  * Search bar rendering
@@ -980,33 +1036,112 @@ static void handle_split_focus_clicks(MtRenderer *r, MtSplitManager *splits)
     }
 }
 
+static void render_pane_header(MtRenderer *r, const MtSplitNode *node, bool focused,
+                               const MtTheme *theme, int pane_index, int pane_count)
+{
+    Color header_bg = focused ? rgba_to_color(theme->tab_active_bg)
+                              : rgba_to_color(theme->tab_inactive_bg);
+    Color text = focused ? rgba_to_color(theme->tab_active_fg)
+                         : rgba_to_color(theme->tab_inactive_fg);
+    Color border = rgba_to_color(theme->split_border);
+    Color accent = rgba_to_color(theme->cursor);
+
+    Rectangle header = {
+        node->x + PANE_INSET,
+        node->y + PANE_INSET,
+        node->w - PANE_INSET * 2.0f,
+        PANE_HEADER_HEIGHT - 4.0f
+    };
+
+    DrawRectangleRounded(header, 0.28f, 8, header_bg);
+    DrawRectangleRoundedLinesEx(header, 0.28f, 8, 1.0f, focused ? accent : border);
+
+    char label[32];
+    snprintf(label, sizeof(label), "Pane %d", pane_index + 1);
+    DrawTextEx(r->font, label,
+               (Vector2){ header.x + 8.0f, header.y + 3.0f },
+               r->font_size * 0.78f, 0, text);
+
+    if (pane_count > 1) {
+        char info[32];
+        snprintf(info, sizeof(info), "%d panes", pane_count);
+        Vector2 info_sz = MeasureTextEx(r->font, info, r->font_size * 0.68f, 0);
+        Color info_color = rgba_to_color(theme->tab_inactive_fg);
+        DrawTextEx(r->font, info,
+                   (Vector2){ header.x + header.width - info_sz.x - 8.0f, header.y + 4.0f },
+                   r->font_size * 0.68f, 0, info_color);
+    }
+
+    if (focused) {
+        Rectangle chip = {
+            header.x + 62.0f,
+            header.y + 3.0f,
+            52.0f,
+            header.height - 6.0f
+        };
+        DrawRectangleRounded(chip, 0.45f, 8, accent);
+        DrawTextEx(r->font, "ACTIVE",
+                   (Vector2){ chip.x + 8.0f, chip.y + 2.0f },
+                   r->font_size * 0.58f, 0, rgba_to_color(theme->bg));
+    }
+}
+
 static void render_split_tree(MtRenderer *r, const MtSplitNode *node, const MtSplitNode *focused,
-                              const MtTheme *theme, MtSearch *search, bool copy_on_select)
+                              const MtTheme *theme, MtSearch *search, bool copy_on_select,
+                              int pane_count, int *pane_index)
 {
     if (!node) return;
 
     if (node->is_leaf) {
+        int this_pane = pane_index ? *pane_index : 0;
+        if (pane_index) (*pane_index)++;
+
+        float content_x = node->x;
+        float content_y = node->y;
+        float content_w = node->w;
+        float content_h = node->h;
+
+        if (pane_count > 1) {
+            render_pane_header(r, node, node == focused, theme, this_pane, pane_count);
+            content_x += PANE_INSET;
+            content_y += PANE_HEADER_HEIGHT;
+            content_w -= PANE_INSET * 2.0f;
+            content_h -= (PANE_HEADER_HEIGHT + PANE_INSET);
+        }
+
+        if (content_w < r->cell_w * 2.0f) content_w = r->cell_w * 2.0f;
+        if (content_h < r->cell_h * 2.0f) content_h = r->cell_h * 2.0f;
+
         render_terminal(r, node->terminal, theme,
                         node == focused ? search : NULL,
-                        node->x, node->y, node->w, node->h, copy_on_select);
+                        content_x, content_y, content_w, content_h, copy_on_select);
         if (node == focused) {
             Color border = rgba_to_color(theme->cursor);
-            border.a = 180;
-            DrawRectangleLinesEx((Rectangle){ node->x, node->y, node->w, node->h }, 2.0f, border);
+            border.a = 210;
+            Rectangle focus_rect = { node->x + 0.5f, node->y + 0.5f, node->w - 1.0f, node->h - 1.0f };
+            DrawRectangleLinesEx(focus_rect, 1.0f, border);
+            DrawRectangle((int)(node->x + 2.0f), (int)(node->y + 2.0f), 14, 2, border);
+            DrawRectangle((int)(node->x + 2.0f), (int)(node->y + 2.0f), 2, 14, border);
         }
         return;
     }
 
-    render_split_tree(r, node->first, focused, theme, search, copy_on_select);
-    render_split_tree(r, node->second, focused, theme, search, copy_on_select);
+    render_split_tree(r, node->first, focused, theme, search, copy_on_select, pane_count, pane_index);
+    render_split_tree(r, node->second, focused, theme, search, copy_on_select, pane_count, pane_index);
 
     Color divider = rgba_to_color(theme->split_border);
     if (node->dir == MT_SPLIT_VERTICAL) {
         float x = node->second ? node->second->x - 1.0f : node->x + node->w * node->ratio;
         DrawRectangle((int)x, (int)node->y, 2, (int)node->h, divider);
+        Color accent = rgba_to_color(theme->cursor);
+        accent.a = 180;
+        DrawRectangle((int)x, (int)(node->y + 6.0f), 2, 28, accent);
     } else {
         float y = node->second ? node->second->y - 1.0f : node->y + node->h * node->ratio;
         DrawRectangle((int)node->x, (int)y, (int)node->w, 2, divider);
+        Color accent = rgba_to_color(theme->cursor);
+        accent.a = 180;
+        DrawRectangle((int)(node->x + 6.0f), (int)y, 28, 2, accent);
     }
 }
 
@@ -1038,12 +1173,69 @@ bool mt_renderer_frame_full(MtRenderer *r, MtTabManager *tabs,
     int sh = GetScreenHeight();
     const MtTheme *theme = &config->theme;
 
+#ifdef _WIN32
+    if (!r->native_tabs) {
+        r->native_tabs = mt_native_tabs_new(GetWindowHandle());
+    }
+    if (r->native_tabs) {
+        mt_native_tabs_sync(r->native_tabs, tabs, theme, sw);
+        MtNativeTabsEvents events = mt_native_tabs_poll(r->native_tabs);
+        if (events.move_from_index >= 0 && events.move_to_index >= 0 &&
+            events.move_from_index < mt_tabs_count(tabs) &&
+            events.move_to_index < mt_tabs_count(tabs) &&
+            events.move_from_index != events.move_to_index) {
+            mt_tabs_move(tabs, events.move_from_index, events.move_to_index);
+            mt_native_tabs_sync(r->native_tabs, tabs, theme, sw);
+        }
+        if (events.selected_index >= 0 && events.selected_index < mt_tabs_count(tabs) &&
+            events.selected_index != mt_tabs_active_index(tabs)) {
+            mt_tabs_select(tabs, events.selected_index);
+            selection_clear(r);
+            mt_native_tabs_sync(r->native_tabs, tabs, theme, sw);
+        }
+        if (events.rename_requested_index >= 0 && events.rename_requested_index < mt_tabs_count(tabs)) {
+            mt_tabs_select(tabs, events.rename_requested_index);
+            mt_tabs_begin_rename(tabs, events.rename_requested_index);
+            selection_clear(r);
+            mt_native_tabs_sync(r->native_tabs, tabs, theme, sw);
+        }
+        if (events.close_requested_index >= 0 && events.close_requested_index < mt_tabs_count(tabs) &&
+            mt_tabs_count(tabs) > 1) {
+            mt_tabs_close(tabs, events.close_requested_index);
+            selection_clear(r);
+            mt_native_tabs_sync(r->native_tabs, tabs, theme, sw);
+        }
+        if (events.add_clicked) {
+            MtTerminal *active_term = mt_tabs_active_terminal(tabs);
+            int cols = active_term ? mt_terminal_cols(active_term) : MYTERM_DEFAULT_COLS;
+            int rows = active_term ? mt_terminal_rows(active_term) : MYTERM_DEFAULT_ROWS;
+            int idx = mt_tabs_add(tabs, cols, rows);
+            if (idx >= 0) {
+                mt_tabs_select(tabs, idx);
+                selection_clear(r);
+                mt_native_tabs_sync(r->native_tabs, tabs, theme, sw);
+            }
+        }
+        if (events.close_clicked && mt_tabs_count(tabs) > 1) {
+            mt_tabs_close(tabs, mt_tabs_active_index(tabs));
+            selection_clear(r);
+            mt_native_tabs_sync(r->native_tabs, tabs, theme, sw);
+        }
+    }
+#else
     handle_tab_bar_ui(r, tabs, sw);
+#endif
 
     BeginDrawing();
     ClearBackground(rgba_to_color(theme->bg));
 
+#ifdef _WIN32
+    DrawRectangle(0, 0, sw, (int)MT_TAB_BAR_HEIGHT, rgba_to_color(theme->tab_bar_bg));
+    DrawLine(0, (int)MT_TAB_BAR_HEIGHT - 1, sw, (int)MT_TAB_BAR_HEIGHT - 1,
+             rgba_to_color(theme->split_border));
+#else
     render_tab_bar(r, tabs, theme);
+#endif
 
     float content_y = MT_TAB_BAR_HEIGHT;
     float content_h = (float)sh - MT_TAB_BAR_HEIGHT;
@@ -1055,10 +1247,13 @@ bool mt_renderer_frame_full(MtRenderer *r, MtTabManager *tabs,
     if (active_tab && active_tab->splits) {
         mt_splits_layout(active_tab->splits, 0.0f, content_y, (float)sw, content_h);
         handle_split_focus_clicks(r, active_tab->splits);
+        int pane_index = 0;
+        int pane_count = mt_splits_count(active_tab->splits);
         render_split_tree(r,
                           mt_splits_root(active_tab->splits),
                           mt_splits_focused_node(active_tab->splits),
-                          theme, search, config->copy_on_select);
+                          theme, search, config->copy_on_select,
+                          pane_count, &pane_index);
     } else {
         MtTerminal *active_term = mt_tabs_active_terminal(tabs);
         if (active_term) {

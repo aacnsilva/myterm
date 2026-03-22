@@ -98,7 +98,10 @@ add_library(myterm_lib STATIC
 target_compile_definitions(myterm_lib PRIVATE MYTERM_WITH_GHOSTTY=1)
 
 if(WIN32)
-    target_sources(myterm_lib PRIVATE src/pty_windows.c)
+    target_sources(myterm_lib PRIVATE
+        src/pty_windows.c
+        src/native_tabs_windows.c
+    )
 else()
     target_sources(myterm_lib PRIVATE src/pty_unix.c)
 endif()
@@ -123,6 +126,7 @@ if(WIN32)
         gdi32
         shell32
         advapi32
+        comctl32
         ntdll
     )
     target_compile_definitions(myterm_lib PUBLIC
