@@ -62,7 +62,6 @@ endif()
 FetchContent_Declare(ghostty
     GIT_REPOSITORY https://github.com/ghostty-org/ghostty.git
     GIT_TAG        8a788a350e105398b1c32df74a4a962e3d723032
-    GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(ghostty)
 
