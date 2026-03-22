@@ -311,27 +311,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 16b. CMakeLists.txt sets IMPORTED_IMPLIB for ghostty-vt on Windows
+# 16b. CMakeLists.txt uses ghostty-vt-static on Windows
 # ---------------------------------------------------------------------------
-test_name="CMakeLists.txt sets IMPORTED_IMPLIB for Windows"
-if grep -q 'IMPORTED_IMPLIB' "$REPO_ROOT/CMakeLists.txt"; then
+test_name="CMakeLists.txt uses ghostty-vt-static on Windows"
+if grep -q 'ghostty-vt-static' "$REPO_ROOT/CMakeLists.txt"; then
     pass "$test_name"
 else
-    fail "$test_name" "Missing IMPORTED_IMPLIB workaround — Windows CMake configure will fail"
+    fail "$test_name" "Missing ghostty-vt-static — Windows build needs the static target"
 fi
 
-test_name="IMPORTED_IMPLIB is guarded by WIN32 check"
-if awk '/if\(WIN32\)/,/endif\(\)/' "$REPO_ROOT/CMakeLists.txt" | grep -q 'IMPORTED_IMPLIB'; then
+test_name="ghostty-vt-static is guarded by WIN32 check"
+if awk '/if\(WIN32\)/,/endif\(\)/' "$REPO_ROOT/CMakeLists.txt" | grep -q 'ghostty-vt-static'; then
     pass "$test_name"
 else
-    fail "$test_name" "IMPORTED_IMPLIB should be inside an if(WIN32) block"
+    fail "$test_name" "ghostty-vt-static should be inside an if(WIN32) block"
 fi
 
-test_name="IMPORTED_IMPLIB derived from ghostty-vt IMPORTED_LOCATION"
-if grep -q 'get_target_property.*ghostty-vt.*IMPORTED_LOCATION' "$REPO_ROOT/CMakeLists.txt"; then
+test_name="GHOSTTY_TARGET variable used in target_link_libraries"
+if grep -q '\${GHOSTTY_TARGET}' "$REPO_ROOT/CMakeLists.txt"; then
     pass "$test_name"
 else
-    fail "$test_name" "Should derive IMPORTED_IMPLIB from the ghostty-vt IMPORTED_LOCATION"
+    fail "$test_name" "Should use \${GHOSTTY_TARGET} in target_link_libraries"
 fi
 
 # ---------------------------------------------------------------------------

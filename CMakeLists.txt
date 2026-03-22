@@ -30,16 +30,16 @@ FetchContent_Declare(ghostty
 )
 FetchContent_MakeAvailable(ghostty)
 
-# Ghostty's CMakeLists.txt declares ghostty-vt as SHARED IMPORTED but does not
-# set IMPORTED_IMPLIB on Windows.  CMake requires this property for shared
-# imported targets on Windows (the .lib import library that accompanies the
-# .dll).  Derive it from IMPORTED_LOCATION by replacing the extension.
+# Ghostty's CMakeLists.txt provides two targets:
+#   ghostty-vt        — SHARED IMPORTED (.dll on Windows)
+#   ghostty-vt-static — STATIC IMPORTED (.lib on Windows)
+# On Windows, linking against the shared target requires an import library
+# (.lib) that Zig does not produce.  Use the static target instead, which
+# also simplifies distribution (no DLL to ship alongside the .exe).
 if(WIN32)
-    get_target_property(_ghostty_loc ghostty-vt IMPORTED_LOCATION)
-    if(_ghostty_loc)
-        string(REGEX REPLACE "\\.[^.]+$" ".lib" _ghostty_implib "${_ghostty_loc}")
-        set_target_properties(ghostty-vt PROPERTIES IMPORTED_IMPLIB "${_ghostty_implib}")
-    endif()
+    set(GHOSTTY_TARGET ghostty-vt-static)
+else()
+    set(GHOSTTY_TARGET ghostty-vt)
 endif()
 
 # --------------------------------------------------------------------------
@@ -83,7 +83,7 @@ target_include_directories(myterm_lib PUBLIC
 )
 
 target_link_libraries(myterm_lib PUBLIC
-    ghostty-vt
+    ${GHOSTTY_TARGET}
     raylib
 )
 
