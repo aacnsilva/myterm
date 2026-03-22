@@ -56,6 +56,7 @@ typedef struct MtRenderer MtRenderer;
 typedef struct MtTabManager MtTabManager;
 typedef struct MtSearch MtSearch;
 typedef struct MtTheme MtTheme;
+typedef struct MtConfig MtConfig;
 
 MtRenderer *mt_renderer_new(int width, int height, const char *title);
 void        mt_renderer_destroy(MtRenderer *r);
@@ -65,10 +66,13 @@ bool mt_renderer_frame(MtRenderer *r, MtTerminal *term);
 
 /* Full render with tabs, search, theming */
 bool mt_renderer_frame_full(MtRenderer *r, MtTabManager *tabs,
-                            MtSearch *search, const MtTheme *theme);
+                            MtSearch *search, const struct MtConfig *config);
 
 float mt_renderer_cell_width(const MtRenderer *r);
 float mt_renderer_cell_height(const MtRenderer *r);
+bool  mt_renderer_copy_selection(MtRenderer *r);
+void  mt_renderer_clear_selection(MtRenderer *r);
+bool  mt_renderer_has_selection(const MtRenderer *r);
 
 /* --------------------------------------------------------------------------
  * Input handling

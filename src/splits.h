@@ -46,14 +46,17 @@ bool mt_splits_split(MtSplitManager *sm, MtSplitDir dir, int cols, int rows);
 
 /* Close the currently focused pane (returns false if last pane) */
 bool mt_splits_close_focused(MtSplitManager *sm);
+bool mt_splits_close_leaf(MtSplitManager *sm, const MtSplitNode *leaf);
 
 /* Navigate focus */
 void mt_splits_focus_next(MtSplitManager *sm);
 void mt_splits_focus_prev(MtSplitManager *sm);
 void mt_splits_focus_dir(MtSplitManager *sm, MtSplitDir dir, bool forward);
+void mt_splits_focus_leaf(MtSplitManager *sm, const MtSplitNode *leaf);
 
 /* Resize split ratio */
 void mt_splits_resize(MtSplitManager *sm, float delta);
+void mt_splits_resize_dir(MtSplitManager *sm, MtSplitDir dir, bool forward, float delta);
 
 /* Layout: recompute bounds given the available area */
 void mt_splits_layout(MtSplitManager *sm, float x, float y, float w, float h);
@@ -64,6 +67,7 @@ MtPty      *mt_splits_focused_pty(MtSplitManager *sm);
 
 /* Get the root for rendering traversal */
 const MtSplitNode *mt_splits_root(const MtSplitManager *sm);
+const MtSplitNode *mt_splits_focused_node(const MtSplitManager *sm);
 
 /* Count total panes */
 int mt_splits_count(const MtSplitManager *sm);

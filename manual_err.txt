@@ -1,0 +1,1 @@
+myterm: spawned configured shell: cmd.exe /Q /K C:\Usersacns\AppData\Local\Temp\myterm-manual-smoke\smoke-shell.cmd

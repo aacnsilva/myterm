@@ -4,6 +4,23 @@
 
 #include "test_harness.h"
 #include "config.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static void make_temp_path(char *out, size_t out_size, const char *filename)
+{
+    const char *base = getenv("TMPDIR");
+#ifdef _WIN32
+    if (!base || !*base) base = getenv("TEMP");
+    if (!base || !*base) base = getenv("TMP");
+    if (!base || !*base) base = ".";
+    snprintf(out, out_size, "%s\\%s", base, filename);
+#else
+    if (!base || !*base) base = "/tmp";
+    snprintf(out, out_size, "%s/%s", base, filename);
+#endif
+}
 
 TEST(default_config_values)
 {
@@ -94,7 +111,10 @@ TEST(theme_palette_populated)
 
 TEST(config_load_nonexistent_file)
 {
-    MtConfig cfg = mt_config_load_from("/tmp/nonexistent_myterm_config_12345");
+    char path[1024];
+    make_temp_path(path, sizeof(path), "nonexistent_myterm_config_12345");
+
+    MtConfig cfg = mt_config_load_from(path);
     /* Should return defaults without crashing */
     ASSERT(cfg.font_size > 0);
     ASSERT(cfg.initial_width > 0);
@@ -103,7 +123,9 @@ TEST(config_load_nonexistent_file)
 TEST(config_load_from_file)
 {
     /* Write a test config file */
-    const char *path = "/tmp/myterm_test_config";
+    char path[1024];
+    make_temp_path(path, sizeof(path), "myterm_test_config");
+
     FILE *f = fopen(path, "w");
     ASSERT(f != NULL);
     fprintf(f, "# Test config\n");

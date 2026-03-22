@@ -1,0 +1,7 @@
+font = C:\Windows\Fonts\CascadiaMono.ttf
+font_size = 16.0
+width = 960
+height = 640
+shell = powershell.exe -NoLogo -NoProfile
+copy_on_select = false
+confirm_close = true

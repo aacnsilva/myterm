@@ -78,7 +78,7 @@ A terminal emulator for Windows 11 powered by [libghostty-vt](https://github.com
 ## Prerequisites
 
 - **CMake** 3.19+
-- **Ninja** build system
+- **A CMake generator** — Ninja, MinGW Makefiles, Visual Studio, etc.
 - **Zig** 0.15.2+ (on PATH) — required to build libghostty-vt
 - **C compiler** — MSVC (Visual Studio 2019+) or GCC/MinGW-w64
 - **Windows 11** (or Windows 10 1809+)
@@ -86,10 +86,42 @@ A terminal emulator for Windows 11 powered by [libghostty-vt](https://github.com
 ## Building
 
 ```bash
-cmake -B build -G Ninja
+cmake -B build -G "MinGW Makefiles" -DCMAKE_C_COMPILER=C:/ProgramData/mingw64/mingw64/bin/gcc.exe
 cmake --build build
-./build/myterm
+./build/myterm.exe
 ```
+
+## Development shortcuts
+
+A root `Makefile` is included for convenience.
+
+```bash
+make dev
+```
+
+On Windows, if `make` is not installed but `mingw32-make` is, use:
+
+```bash
+mingw32-make dev
+```
+
+Useful targets:
+
+```bash
+make build   # configure + build
+make run     # run the latest build
+make dev     # build + run
+make test    # run ctest
+make smoke   # run the Windows smoke test
+```
+
+On Windows, `make run` / `make dev` now launch `myterm` with an isolated repo-local dev config at:
+
+```text
+.dev/appdata/myterm/config
+```
+
+That avoids broken `%APPDATA%\\myterm\\config` entries interfering with development runs.
 
 ### Build options
 

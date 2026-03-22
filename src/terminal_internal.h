@@ -9,6 +9,7 @@
 #include "myterm.h"
 #include <ghostty/ghostty.h>
 
+const GhosttyAllocator *mt_terminal_get_allocator(void);
 GhosttyTerminal      mt_terminal_get_vt(const MtTerminal *t);
 GhosttyRenderState   mt_terminal_get_render_state(const MtTerminal *t);
 GhosttyKeyEncoder    mt_terminal_get_key_encoder(const MtTerminal *t);

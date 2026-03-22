@@ -95,6 +95,8 @@ add_library(myterm_lib STATIC
     src/splits.c
 )
 
+target_compile_definitions(myterm_lib PRIVATE MYTERM_WITH_GHOSTTY=1)
+
 if(WIN32)
     target_sources(myterm_lib PRIVATE src/pty_windows.c)
 else()
@@ -121,6 +123,7 @@ if(WIN32)
         gdi32
         shell32
         advapi32
+        ntdll
     )
     target_compile_definitions(myterm_lib PUBLIC
         _WIN32_WINNT=0x0A00
@@ -141,6 +144,10 @@ endif()
 add_executable(myterm src/main.c)
 target_link_libraries(myterm PRIVATE myterm_lib)
 
+if(WIN32)
+    add_executable(smoke_shell_helper tests/smoke_shell_helper.c)
+endif()
+
 # --------------------------------------------------------------------------
 # Tests  (standalone via tests/Makefile — no ghostty/raylib needed)
 # --------------------------------------------------------------------------
@@ -149,15 +156,44 @@ target_link_libraries(myterm PRIVATE myterm_lib)
 if(MYTERM_BUILD_TESTS)
     enable_testing()
 
-    add_executable(test_tabs     tests/test_tabs.c)
-    add_executable(test_config   tests/test_config.c)
-    add_executable(test_search   tests/test_search.c)
-    add_executable(test_splits   tests/test_splits.c)
+    # Keep CMake tests aligned with tests/Makefile: pure logic only, no raylib/ghostty.
+    add_executable(test_tabs
+        tests/test_tabs.c
+        tests/stubs.c
+        src/tabs.c
+        src/splits.c
+    )
+    add_executable(test_config
+        tests/test_config.c
+        src/config.c
+    )
+    add_executable(test_search
+        tests/test_search.c
+        tests/stubs.c
+        src/search.c
+    )
+    add_executable(test_splits
+        tests/test_splits.c
+        tests/stubs.c
+        src/splits.c
+    )
 
-    target_link_libraries(test_tabs     PRIVATE myterm_lib)
-    target_link_libraries(test_config   PRIVATE myterm_lib)
-    target_link_libraries(test_search   PRIVATE myterm_lib)
-    target_link_libraries(test_splits   PRIVATE myterm_lib)
+    target_include_directories(test_tabs   PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+    target_include_directories(test_config PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+    target_include_directories(test_search PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+    target_include_directories(test_splits PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+
+    if(MSVC)
+        target_compile_options(test_tabs   PRIVATE /W4)
+        target_compile_options(test_config PRIVATE /W4)
+        target_compile_options(test_search PRIVATE /W4)
+        target_compile_options(test_splits PRIVATE /W4)
+    else()
+        target_compile_options(test_tabs   PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(test_config PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(test_search PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(test_splits PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
 
     add_test(NAME tabs     COMMAND test_tabs)
     add_test(NAME config   COMMAND test_config)

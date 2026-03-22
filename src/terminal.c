@@ -11,6 +11,7 @@
 #include <ghostty/ghostty.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 struct MtTerminal {
     GhosttyTerminal     vt;
@@ -24,6 +25,60 @@ struct MtTerminal {
     bool                valid;
 };
 
+static void *mt_ghostty_alloc(void *ctx, size_t len, uint8_t alignment, uintptr_t ret_addr)
+{
+    (void)ctx;
+    (void)alignment;
+    (void)ret_addr;
+    if (len == 0) len = 1;
+    return malloc(len);
+}
+
+static bool mt_ghostty_resize(void *ctx, void *memory, size_t memory_len,
+                              uint8_t alignment, size_t new_len, uintptr_t ret_addr)
+{
+    (void)ctx;
+    (void)memory;
+    (void)memory_len;
+    (void)alignment;
+    (void)new_len;
+    (void)ret_addr;
+    return false;
+}
+
+static void *mt_ghostty_remap(void *ctx, void *memory, size_t memory_len,
+                              uint8_t alignment, size_t new_len, uintptr_t ret_addr)
+{
+    (void)ctx;
+    (void)memory_len;
+    (void)alignment;
+    (void)ret_addr;
+    if (new_len == 0) new_len = 1;
+    return realloc(memory, new_len);
+}
+
+static void mt_ghostty_free(void *ctx, void *memory, size_t memory_len,
+                            uint8_t alignment, uintptr_t ret_addr)
+{
+    (void)ctx;
+    (void)memory_len;
+    (void)alignment;
+    (void)ret_addr;
+    free(memory);
+}
+
+static const GhosttyAllocatorVtable mt_ghostty_allocator_vtable = {
+    .alloc = mt_ghostty_alloc,
+    .resize = mt_ghostty_resize,
+    .remap = mt_ghostty_remap,
+    .free = mt_ghostty_free,
+};
+
+static const GhosttyAllocator mt_ghostty_allocator = {
+    .ctx = NULL,
+    .vtable = &mt_ghostty_allocator_vtable,
+};
+
 MtTerminal *mt_terminal_new(int cols, int rows)
 {
     MtTerminal *t = calloc(1, sizeof(MtTerminal));
@@ -35,14 +90,14 @@ MtTerminal *mt_terminal_new(int cols, int rows)
         .max_scrollback = MYTERM_MAX_SCROLLBACK,
     };
 
-    GhosttyResult err = ghostty_terminal_new(NULL, &t->vt, opts);
+    GhosttyResult err = ghostty_terminal_new(&mt_ghostty_allocator, &t->vt, opts);
     if (err != GHOSTTY_SUCCESS) {
         free(t);
         return NULL;
     }
 
     /* Render state — used to snapshot the terminal for drawing */
-    err = ghostty_render_state_new(NULL, &t->render_state);
+    err = ghostty_render_state_new(&mt_ghostty_allocator, &t->render_state);
     if (err != GHOSTTY_SUCCESS) {
         ghostty_terminal_destroy(t->vt);
         free(t);
@@ -50,7 +105,7 @@ MtTerminal *mt_terminal_new(int cols, int rows)
     }
 
     /* Input encoders — translate platform key/mouse events to VT sequences */
-    err = ghostty_key_encoder_new(NULL, &t->key_encoder);
+    err = ghostty_key_encoder_new(&mt_ghostty_allocator, &t->key_encoder);
     if (err != GHOSTTY_SUCCESS) {
         ghostty_render_state_destroy(t->render_state);
         ghostty_terminal_destroy(t->vt);
@@ -58,7 +113,7 @@ MtTerminal *mt_terminal_new(int cols, int rows)
         return NULL;
     }
 
-    err = ghostty_key_encoder_event_new(&t->key_event);
+    err = ghostty_key_event_new(&mt_ghostty_allocator, &t->key_event);
     if (err != GHOSTTY_SUCCESS) {
         ghostty_key_encoder_destroy(t->key_encoder);
         ghostty_render_state_destroy(t->render_state);
@@ -67,7 +122,7 @@ MtTerminal *mt_terminal_new(int cols, int rows)
         return NULL;
     }
 
-    err = ghostty_mouse_encoder_new(NULL, &t->mouse_encoder);
+    err = ghostty_mouse_encoder_new(&mt_ghostty_allocator, &t->mouse_encoder);
     if (err != GHOSTTY_SUCCESS) {
         ghostty_key_encoder_event_destroy(t->key_event);
         ghostty_key_encoder_destroy(t->key_encoder);
@@ -77,7 +132,7 @@ MtTerminal *mt_terminal_new(int cols, int rows)
         return NULL;
     }
 
-    err = ghostty_mouse_encoder_event_new(&t->mouse_event);
+    err = ghostty_mouse_event_new(&mt_ghostty_allocator, &t->mouse_event);
     if (err != GHOSTTY_SUCCESS) {
         ghostty_mouse_encoder_destroy(t->mouse_encoder);
         ghostty_key_encoder_event_destroy(t->key_event);
@@ -134,6 +189,11 @@ int mt_terminal_rows(const MtTerminal *t)
 }
 
 /* --- Internal accessors used by renderer.c and input.c --- */
+
+const GhosttyAllocator *mt_terminal_get_allocator(void)
+{
+    return &mt_ghostty_allocator;
+}
 
 GhosttyTerminal mt_terminal_get_vt(const MtTerminal *t)
 {

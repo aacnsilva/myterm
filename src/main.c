@@ -22,10 +22,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Forward declarations for UI rendering */
-void mt_render_tab_bar(MtRenderer *r, MtTabManager *tabs, const MtTheme *theme);
-void mt_render_search_bar(MtRenderer *r, MtSearch *search, const MtTheme *theme);
-
 /* Check if Ctrl+Shift+<key> is pressed */
 static bool ctrl_shift_pressed(int key)
 {
@@ -38,7 +34,84 @@ static bool ctrl_pressed(int key)
 {
     return (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) &&
            !(IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) &&
+           !(IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT)) &&
            IsKeyPressed(key);
+}
+
+static bool ctrl_alt_pressed(int key)
+{
+    return (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) &&
+           (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT)) &&
+           !(IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) &&
+           IsKeyPressed(key);
+}
+
+static bool alt_shift_pressed(int key)
+{
+    return !(IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) &&
+           (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT)) &&
+           (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) &&
+           IsKeyPressed(key);
+}
+
+static const MtSplitNode *read_split_output(const MtSplitNode *node, char *buf, size_t buf_len,
+                                            bool mark_activity, bool *had_output)
+{
+    if (!node) return NULL;
+
+    if (node->is_leaf) {
+        if (!node->pty || !node->terminal) return NULL;
+
+        int n = mt_pty_read(node->pty, buf, buf_len);
+        if (n > 0) {
+            mt_terminal_feed(node->terminal, buf, (size_t)n);
+            if (mark_activity && had_output) *had_output = true;
+        } else if (n < 0 || !mt_pty_is_alive(node->pty)) {
+            return node;
+        }
+        return NULL;
+    }
+
+    const MtSplitNode *dead = read_split_output(node->first, buf, buf_len, mark_activity, had_output);
+    if (dead) return dead;
+    return read_split_output(node->second, buf, buf_len, mark_activity, had_output);
+}
+
+static void resize_split_tree(const MtSplitNode *node, int cols, int rows)
+{
+    if (!node) return;
+    if (node->is_leaf) {
+        if (node->terminal) mt_terminal_resize(node->terminal, cols, rows);
+        if (node->pty) mt_pty_resize(node->pty, cols, rows);
+        return;
+    }
+    resize_split_tree(node->first, cols, rows);
+    resize_split_tree(node->second, cols, rows);
+}
+
+static void handle_tab_rename_input(MtTabManager *tabs)
+{
+    int active_index = mt_tabs_active_index(tabs);
+    if (active_index < 0 || !mt_tabs_is_renaming(tabs, active_index)) return;
+
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        mt_tabs_cancel_rename(tabs, active_index);
+        return;
+    }
+
+    if (IsKeyPressed(KEY_ENTER)) {
+        mt_tabs_commit_rename(tabs, active_index);
+        return;
+    }
+
+    int ch;
+    while ((ch = GetCharPressed()) != 0) {
+        mt_tabs_rename_append(tabs, active_index, ch);
+    }
+
+    if (IsKeyPressed(KEY_BACKSPACE)) {
+        mt_tabs_rename_backspace(tabs, active_index);
+    }
 }
 
 int main(int argc, char *argv[])
@@ -46,10 +119,16 @@ int main(int argc, char *argv[])
     (void)argc;
     (void)argv;
 
-    /* Load configuration */
     MtConfig config = mt_config_load();
 
-    /* --- Create components --- */
+    if (config.shell[0] != '\0') {
+#ifdef _WIN32
+        _putenv_s("MYTERM_SHELL", config.shell);
+#else
+        setenv("MYTERM_SHELL", config.shell, 1);
+#endif
+    }
+
     MtRenderer *renderer = mt_renderer_new(
         config.initial_width, config.initial_height, MYTERM_WINDOW_TITLE);
     if (!renderer) {
@@ -57,7 +136,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Compute initial grid size */
     float cw = mt_renderer_cell_width(renderer);
     float ch = mt_renderer_cell_height(renderer);
     int cols = MYTERM_DEFAULT_COLS;
@@ -70,7 +148,6 @@ int main(int argc, char *argv[])
         if (rows < 1) rows = 1;
     }
 
-    /* Create tab manager and first tab */
     MtTabManager *tabs = mt_tabs_new();
     if (!tabs) {
         fprintf(stderr, "myterm: failed to create tab manager\n");
@@ -85,10 +162,8 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Create search */
     MtSearch *search = mt_search_new();
 
-    /* --- Main loop --- */
     char read_buf[16384];
     int prev_cols = cols;
     int prev_rows = rows;
@@ -97,20 +172,26 @@ int main(int argc, char *argv[])
         MtTab *active = mt_tabs_active(tabs);
         if (!active) break;
 
-        /* Read PTY output for ALL tabs (so background tabs process output) */
         for (int i = 0; i < mt_tabs_count(tabs); i++) {
-            MtTab *tab = mt_tabs_get(tabs, i);
-            if (!tab || !mt_pty_is_alive(tab->pty)) continue;
+            MtSplitManager *splits = mt_tabs_get_splits(tabs, i);
+            if (!splits) continue;
 
-            int n = mt_pty_read(tab->pty, read_buf, sizeof(read_buf));
-            if (n > 0) {
-                mt_terminal_feed(tab->terminal, read_buf, (size_t)n);
-                if (i != mt_tabs_active_index(tabs)) {
-                    mt_tabs_mark_activity(tabs, i);
-                }
-            } else if (n < 0) {
-                /* Child exited — close this tab */
-                if (mt_tabs_count(tabs) > 1) {
+            bool had_output = false;
+            const MtSplitNode *dead_leaf = read_split_output(
+                mt_splits_root(splits),
+                read_buf, sizeof(read_buf),
+                i != mt_tabs_active_index(tabs),
+                &had_output
+            );
+
+            if (had_output) {
+                mt_tabs_mark_activity(tabs, i);
+            }
+
+            if (dead_leaf) {
+                if (mt_splits_count(splits) > 1) {
+                    mt_splits_close_leaf(splits, dead_leaf);
+                } else if (mt_tabs_count(tabs) > 1) {
                     mt_tabs_close(tabs, i);
                     i--;
                     continue;
@@ -120,71 +201,168 @@ int main(int argc, char *argv[])
             }
         }
 
-        /* Refresh active tab reference after possible closes */
         active = mt_tabs_active(tabs);
         if (!active) break;
 
-        /* --- Handle keyboard shortcuts (before passing to terminal) --- */
+        if (mt_search_is_active(search)) {
+            mt_search_execute(search, mt_tabs_active_terminal(tabs));
+        }
 
-        /* Ctrl+Shift+T: New tab */
-        if (ctrl_shift_pressed(KEY_T)) {
-            mt_tabs_add(tabs, prev_cols, prev_rows);
-            mt_tabs_select(tabs, mt_tabs_count(tabs) - 1);
+        if (mt_tabs_is_renaming(tabs, mt_tabs_active_index(tabs))) {
+            handle_tab_rename_input(tabs);
             goto render;
         }
 
-        /* Ctrl+Shift+W: Close current tab */
+        if (IsKeyPressed(KEY_F2) || ctrl_shift_pressed(KEY_R)) {
+            mt_tabs_begin_rename(tabs, mt_tabs_active_index(tabs));
+            goto render;
+        }
+
+        if (ctrl_shift_pressed(KEY_T)) {
+            if (mt_tabs_add(tabs, prev_cols, prev_rows) >= 0) {
+                mt_tabs_select(tabs, mt_tabs_count(tabs) - 1);
+                mt_renderer_clear_selection(renderer);
+            }
+            goto render;
+        }
+
         if (ctrl_shift_pressed(KEY_W)) {
             if (mt_tabs_count(tabs) > 1) {
                 mt_tabs_close(tabs, mt_tabs_active_index(tabs));
             } else {
                 goto done;
             }
+            mt_renderer_clear_selection(renderer);
             goto render;
         }
 
-        /* Ctrl+Tab: Next tab */
+        if (ctrl_shift_pressed(KEY_PAGE_UP)) {
+            int idx = mt_tabs_active_index(tabs);
+            if (idx > 0) {
+                mt_tabs_move(tabs, idx, idx - 1);
+                mt_tabs_select(tabs, idx - 1);
+                mt_renderer_clear_selection(renderer);
+            }
+            goto render;
+        }
+
+        if (ctrl_shift_pressed(KEY_PAGE_DOWN)) {
+            int idx = mt_tabs_active_index(tabs);
+            if (idx >= 0 && idx < mt_tabs_count(tabs) - 1) {
+                mt_tabs_move(tabs, idx, idx + 1);
+                mt_tabs_select(tabs, idx + 1);
+                mt_renderer_clear_selection(renderer);
+            }
+            goto render;
+        }
+
         if (ctrl_pressed(KEY_TAB)) {
             mt_tabs_select_next(tabs);
+            mt_renderer_clear_selection(renderer);
             goto render;
         }
 
-        /* Ctrl+Shift+Tab: Previous tab (use KEY_TAB with shift check) */
         if (ctrl_shift_pressed(KEY_TAB)) {
             mt_tabs_select_prev(tabs);
+            mt_renderer_clear_selection(renderer);
             goto render;
         }
 
-        /* Ctrl+1-9: Switch to tab N */
         for (int n = KEY_ONE; n <= KEY_NINE; n++) {
             if (ctrl_pressed(n)) {
                 int idx = n - KEY_ONE;
                 if (idx < mt_tabs_count(tabs)) {
                     mt_tabs_select(tabs, idx);
+                    mt_renderer_clear_selection(renderer);
                 }
-                break;
+                goto render;
             }
         }
 
-        /* Ctrl+Shift+F: Toggle search */
+        MtSplitManager *active_splits = mt_tabs_active_splits(tabs);
+        MtTerminal *focused_term = mt_tabs_active_terminal(tabs);
+        MtPty *focused_pty = mt_tabs_active_pty(tabs);
+
+        if (ctrl_shift_pressed(KEY_D)) {
+            int split_cols = focused_term ? mt_terminal_cols(focused_term) : prev_cols;
+            int split_rows = focused_term ? mt_terminal_rows(focused_term) : prev_rows;
+            if (active_splits) {
+                mt_splits_split(active_splits, MT_SPLIT_VERTICAL, split_cols, split_rows);
+                mt_renderer_clear_selection(renderer);
+            }
+            goto render;
+        }
+
+        if (ctrl_shift_pressed(KEY_E)) {
+            int split_cols = focused_term ? mt_terminal_cols(focused_term) : prev_cols;
+            int split_rows = focused_term ? mt_terminal_rows(focused_term) : prev_rows;
+            if (active_splits) {
+                mt_splits_split(active_splits, MT_SPLIT_HORIZONTAL, split_cols, split_rows);
+                mt_renderer_clear_selection(renderer);
+            }
+            goto render;
+        }
+
+        if (ctrl_alt_pressed(KEY_RIGHT) && active_splits) {
+            mt_splits_focus_dir(active_splits, MT_SPLIT_VERTICAL, true);
+            mt_renderer_clear_selection(renderer);
+            goto render;
+        }
+        if (ctrl_alt_pressed(KEY_LEFT) && active_splits) {
+            mt_splits_focus_dir(active_splits, MT_SPLIT_VERTICAL, false);
+            mt_renderer_clear_selection(renderer);
+            goto render;
+        }
+        if (ctrl_alt_pressed(KEY_DOWN) && active_splits) {
+            mt_splits_focus_dir(active_splits, MT_SPLIT_HORIZONTAL, true);
+            mt_renderer_clear_selection(renderer);
+            goto render;
+        }
+        if (ctrl_alt_pressed(KEY_UP) && active_splits) {
+            mt_splits_focus_dir(active_splits, MT_SPLIT_HORIZONTAL, false);
+            mt_renderer_clear_selection(renderer);
+            goto render;
+        }
+
+        if (alt_shift_pressed(KEY_RIGHT) && active_splits) {
+            mt_splits_resize_dir(active_splits, MT_SPLIT_VERTICAL, true, 0.05f);
+            goto render;
+        }
+        if (alt_shift_pressed(KEY_LEFT) && active_splits) {
+            mt_splits_resize_dir(active_splits, MT_SPLIT_VERTICAL, false, 0.05f);
+            goto render;
+        }
+        if (alt_shift_pressed(KEY_DOWN) && active_splits) {
+            mt_splits_resize_dir(active_splits, MT_SPLIT_HORIZONTAL, true, 0.05f);
+            goto render;
+        }
+        if (alt_shift_pressed(KEY_UP) && active_splits) {
+            mt_splits_resize_dir(active_splits, MT_SPLIT_HORIZONTAL, false, 0.05f);
+            goto render;
+        }
+
+        if (ctrl_alt_pressed(KEY_W) && active_splits) {
+            mt_splits_close_focused(active_splits);
+            mt_renderer_clear_selection(renderer);
+            goto render;
+        }
+
         if (ctrl_shift_pressed(KEY_F)) {
             if (mt_search_is_active(search)) {
                 mt_search_close(search);
             } else {
                 mt_search_open(search);
+                mt_search_execute(search, focused_term);
             }
             goto render;
         }
 
-        /* Search mode input handling */
         if (mt_search_is_active(search)) {
-            /* Escape to close search */
             if (IsKeyPressed(KEY_ESCAPE)) {
                 mt_search_close(search);
                 goto render;
             }
 
-            /* Enter: next match, Shift+Enter: prev match */
             if (IsKeyPressed(KEY_ENTER)) {
                 if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
                     mt_search_prev(search);
@@ -194,22 +372,20 @@ int main(int argc, char *argv[])
                 goto render;
             }
 
-            /* Typing into search box */
-            int ch;
-            while ((ch = GetCharPressed()) != 0) {
+            int ch_in;
+            while ((ch_in = GetCharPressed()) != 0) {
                 char query[MT_SEARCH_MAX_QUERY];
                 strncpy(query, mt_search_get_query(search), MT_SEARCH_MAX_QUERY - 1);
                 query[MT_SEARCH_MAX_QUERY - 1] = '\0';
                 size_t len = strlen(query);
-                if (ch >= 32 && len < MT_SEARCH_MAX_QUERY - 2) {
-                    query[len] = (char)ch;
+                if (ch_in >= 32 && len < MT_SEARCH_MAX_QUERY - 2) {
+                    query[len] = (char)ch_in;
                     query[len + 1] = '\0';
                     mt_search_set_query(search, query);
-                    mt_search_execute(search, active->terminal);
+                    mt_search_execute(search, focused_term);
                 }
             }
 
-            /* Backspace in search */
             if (IsKeyPressed(KEY_BACKSPACE)) {
                 char query[MT_SEARCH_MAX_QUERY];
                 strncpy(query, mt_search_get_query(search), MT_SEARCH_MAX_QUERY - 1);
@@ -218,32 +394,30 @@ int main(int argc, char *argv[])
                 if (len > 0) {
                     query[len - 1] = '\0';
                     mt_search_set_query(search, query);
-                    mt_search_execute(search, active->terminal);
+                    mt_search_execute(search, focused_term);
                 }
             }
 
             goto render;
         }
 
-        /* Ctrl+Shift+C: Copy */
         if (ctrl_shift_pressed(KEY_C)) {
-            /* TODO: Copy selected text to clipboard via SetClipboardText() */
+            mt_renderer_copy_selection(renderer);
             goto render;
         }
 
-        /* Ctrl+Shift+V: Paste */
         if (ctrl_shift_pressed(KEY_V)) {
             const char *clip = GetClipboardText();
-            if (clip && *clip) {
-                mt_pty_write(active->pty, clip, strlen(clip));
+            if (clip && *clip && focused_pty) {
+                mt_pty_write(focused_pty, clip, strlen(clip));
             }
             goto render;
         }
 
-        /* Pass input to active terminal */
-        mt_input_process(active->terminal, active->pty);
+        if (focused_term && focused_pty) {
+            mt_input_process(focused_term, focused_pty);
+        }
 
-        /* Handle window resize */
         if (IsWindowResized()) {
             int sw = GetScreenWidth();
             int sh = GetScreenHeight();
@@ -255,12 +429,10 @@ int main(int argc, char *argv[])
                 if (new_rows < 1) new_rows = 1;
 
                 if (new_cols != prev_cols || new_rows != prev_rows) {
-                    /* Resize all tabs */
                     for (int i = 0; i < mt_tabs_count(tabs); i++) {
-                        MtTab *tab = mt_tabs_get(tabs, i);
-                        if (tab) {
-                            mt_terminal_resize(tab->terminal, new_cols, new_rows);
-                            mt_pty_resize(tab->pty, new_cols, new_rows);
+                        MtSplitManager *splits = mt_tabs_get_splits(tabs, i);
+                        if (splits) {
+                            resize_split_tree(mt_splits_root(splits), new_cols, new_rows);
                         }
                     }
                     prev_cols = new_cols;
@@ -270,14 +442,12 @@ int main(int argc, char *argv[])
         }
 
 render:
-        /* Render frame */
-        if (!mt_renderer_frame_full(renderer, tabs, search, &config.theme)) {
+        if (!mt_renderer_frame_full(renderer, tabs, search, &config)) {
             break;
         }
     }
 
 done:
-    /* --- Cleanup --- */
     mt_search_destroy(search);
     mt_tabs_destroy(tabs);
     mt_renderer_destroy(renderer);

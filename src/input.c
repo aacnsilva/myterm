@@ -77,6 +77,11 @@ static GhosttyMods get_current_mods(void)
     return mods;
 }
 
+static bool key_pressed_or_repeat(int key)
+{
+    return IsKeyPressed(key) || IsKeyPressedRepeat(key);
+}
+
 static void sync_mouse_encoder_geometry(MtTerminal *term, GhosttyMouseEncoder encoder)
 {
     int cols = mt_terminal_cols(term);
@@ -157,9 +162,89 @@ int mt_input_process(MtTerminal *term, MtPty *pty)
         }
     }
 
-    /* Special keys */
-    int key;
-    while ((key = GetKeyPressed()) != 0) {
+    /* Special keys + Ctrl/Alt modified printable keys.
+     * Use repeat-aware polling so held keys repeat input. */
+    static const int keys_to_poll[] = {
+        KEY_SPACE,
+        KEY_ENTER,
+        KEY_TAB,
+        KEY_BACKSPACE,
+        KEY_ESCAPE,
+        KEY_UP,
+        KEY_DOWN,
+        KEY_LEFT,
+        KEY_RIGHT,
+        KEY_HOME,
+        KEY_END,
+        KEY_PAGE_UP,
+        KEY_PAGE_DOWN,
+        KEY_INSERT,
+        KEY_DELETE,
+        KEY_F1,
+        KEY_F2,
+        KEY_F3,
+        KEY_F4,
+        KEY_F5,
+        KEY_F6,
+        KEY_F7,
+        KEY_F8,
+        KEY_F9,
+        KEY_F10,
+        KEY_F11,
+        KEY_F12,
+        KEY_MINUS,
+        KEY_EQUAL,
+        KEY_LEFT_BRACKET,
+        KEY_RIGHT_BRACKET,
+        KEY_BACKSLASH,
+        KEY_SEMICOLON,
+        KEY_APOSTROPHE,
+        KEY_COMMA,
+        KEY_PERIOD,
+        KEY_SLASH,
+        KEY_GRAVE,
+        KEY_ZERO,
+        KEY_ONE,
+        KEY_TWO,
+        KEY_THREE,
+        KEY_FOUR,
+        KEY_FIVE,
+        KEY_SIX,
+        KEY_SEVEN,
+        KEY_EIGHT,
+        KEY_NINE,
+        KEY_A,
+        KEY_B,
+        KEY_C,
+        KEY_D,
+        KEY_E,
+        KEY_F,
+        KEY_G,
+        KEY_H,
+        KEY_I,
+        KEY_J,
+        KEY_K,
+        KEY_L,
+        KEY_M,
+        KEY_N,
+        KEY_O,
+        KEY_P,
+        KEY_Q,
+        KEY_R,
+        KEY_S,
+        KEY_T,
+        KEY_U,
+        KEY_V,
+        KEY_W,
+        KEY_X,
+        KEY_Y,
+        KEY_Z,
+    };
+
+    for (size_t i = 0; i < sizeof(keys_to_poll) / sizeof(keys_to_poll[0]); i++) {
+        int key = keys_to_poll[i];
+        if (!key_pressed_or_repeat(key)) continue;
+
         GhosttyKey gk = raylib_to_ghostty_key(key);
         if (gk == GHOSTTY_KEY_NONE) continue;
 

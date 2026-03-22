@@ -37,7 +37,7 @@ typedef struct MtTheme {
     MtRgba  palette[16];  /* ANSI 16-color palette */
 } MtTheme;
 
-typedef struct {
+typedef struct MtConfig {
     /* Font */
     char    font_path[MT_MAX_FONT_PATH];
     float   font_size;

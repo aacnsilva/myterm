@@ -40,7 +40,7 @@ test: $(TESTS)
 		echo "All test suites PASSED"; \
 	fi
 
-test_tabs: test_tabs.c $(SRCDIR)/tabs.c stubs.c
+test_tabs: test_tabs.c $(SRCDIR)/tabs.c $(SRCDIR)/splits.c stubs.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 test_config: test_config.c $(SRCDIR)/config.c

@@ -231,7 +231,7 @@ static MtConfig default_config(void)
     cfg.theme = builtin_themes[MT_THEME_CATPPUCCIN_MOCHA];
 
 #ifdef _WIN32
-    strncpy(cfg.shell, "powershell.exe", sizeof(cfg.shell) - 1);
+    strncpy(cfg.shell, "powershell.exe -NoLogo -NoProfile", sizeof(cfg.shell) - 1);
     strncpy(cfg.font_path, "C:\\Windows\\Fonts\\CascadiaMono.ttf", MT_MAX_FONT_PATH - 1);
 #else
     const char *shell = getenv("SHELL");
