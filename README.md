@@ -79,7 +79,7 @@ A terminal emulator for Windows 11 powered by [libghostty-vt](https://github.com
 
 - **CMake** 3.19+
 - **Ninja** build system
-- **Zig** 0.15.x (on PATH) — required to build libghostty-vt
+- **Zig** 0.15.2+ (on PATH) — required to build libghostty-vt
 - **C compiler** — MSVC (Visual Studio 2019+) or GCC/MinGW-w64
 - **Windows 11** (or Windows 10 1809+)
 

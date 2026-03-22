@@ -22,11 +22,28 @@ option(MYTERM_BUILD_TESTS "Build unit tests" ON)
 #   - building the static library with -Dsimd=false avoids extra transitive
 #     C++/SIMD dependencies in downstream consumers
 #
-# Requires: zig 0.15.x on PATH.
+# Requires: zig 0.15.2+ on PATH.
 #
 # Reference: https://github.com/ghostty-org/ghostling
 # --------------------------------------------------------------------------
 include(FetchContent)
+
+find_program(MYTERM_ZIG_EXECUTABLE zig)
+if(NOT MYTERM_ZIG_EXECUTABLE)
+    message(FATAL_ERROR "zig not found on PATH (required: Zig 0.15.2+)")
+endif()
+
+execute_process(
+    COMMAND "${MYTERM_ZIG_EXECUTABLE}" version
+    OUTPUT_VARIABLE MYTERM_ZIG_VERSION
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+if(MYTERM_ZIG_VERSION VERSION_LESS "0.15.2")
+    message(FATAL_ERROR
+        "myterm requires Zig 0.15.2+ because the pinned Ghostty dependency requires it; found ${MYTERM_ZIG_VERSION}"
+    )
+endif()
 
 set(MYTERM_GHOSTTY_TARGET ghostty-vt)
 if(WIN32)
@@ -44,7 +61,7 @@ endif()
 # Update this hash when upgrading ghostty.
 FetchContent_Declare(ghostty
     GIT_REPOSITORY https://github.com/ghostty-org/ghostty.git
-    GIT_TAG        main
+    GIT_TAG        8a788a350e105398b1c32df74a4a962e3d723032
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(ghostty)

@@ -196,6 +196,13 @@ else
     fail "$test_name" "Release workflow does not invoke iscc (Inno Setup compiler)"
 fi
 
+test_name="release workflow uses Zig 0.15.2 or newer"
+if grep -Eq 'version:\s*0\.15\.[2-9]|version:\s*0\.[1-9][6-9]\.|version:\s*[1-9]\.' "$RELEASE_YML"; then
+    pass "$test_name"
+else
+    fail "$test_name" "Release workflow should use Zig 0.15.2 or newer for Ghostty"
+fi
+
 test_name="release workflow uploads installer artifact"
 if grep -q 'myterm-windows-installer' "$RELEASE_YML"; then
     pass "$test_name"
@@ -278,6 +285,13 @@ else
     fail "$test_name" "CI workflow should install Zig for the Windows build"
 fi
 
+test_name="ci.yml uses Zig 0.15.2 or newer"
+if grep -Eq 'version:\s*0\.15\.[2-9]|version:\s*0\.[1-9][6-9]\.|version:\s*[1-9]\.' "$CI_YML"; then
+    pass "$test_name"
+else
+    fail "$test_name" "CI workflow should use Zig 0.15.2 or newer for Ghostty"
+fi
+
 # ---------------------------------------------------------------------------
 # 14. Source files referenced in tests/Makefile exist
 # ---------------------------------------------------------------------------
@@ -322,6 +336,13 @@ if grep -q 'MYTERM_BUILD_TESTS' "$REPO_ROOT/CMakeLists.txt"; then
     pass "$test_name"
 else
     fail "$test_name" "Missing MYTERM_BUILD_TESTS option — release build flag will fail"
+fi
+
+test_name="CMakeLists.txt pins Ghostty to a commit"
+if grep -Eq 'GIT_TAG\s+[0-9a-f]{40}' "$REPO_ROOT/CMakeLists.txt"; then
+    pass "$test_name"
+else
+    fail "$test_name" "Ghostty dependency should be pinned to a specific commit"
 fi
 
 # ---------------------------------------------------------------------------
